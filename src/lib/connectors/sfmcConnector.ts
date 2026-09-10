@@ -131,43 +131,101 @@ export class SFMCConnector implements Connector {
     try {
       const { access_token } = await getSfmcAccessToken();
       const baseUri = sfmcRestBaseUri.replace(/\/$/, '');
-      const sentUrl = `${baseUri}/data/v1/customobjectdata/key/WhatsApp_Sent_Messages/rowset?$pageSize=${pageSize}`;
-      const recvUrl = `${baseUri}/data/v1/customobjectdata/key/WhatsApp_Received_Messages/rowset?$pageSize=${pageSize}`;
 
-      const [sentRes, recvRes] = await Promise.all([
-        fetch(sentUrl, { headers: { Authorization: `Bearer ${access_token}` } }),
-        fetch(recvUrl, { headers: { Authorization: `Bearer ${access_token}` } }),
+      // Helper to fetch all pages from a DE
+      const fetchAllDeRows = async (deKey: string): Promise<any[]> => {
+        const allItems: any[] = [];
+        let page = 1;
+        const fetchPageSize = 2500;
+        const maxPages = 20;
+
+        while (page <= maxPages) {
+          const url = `${baseUri}/data/v1/customobjectdata/key/${deKey}/rowset?$pageSize=${fetchPageSize}&$page=${page}`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${access_token}` },
+          });
+
+          if (!res.ok) break;
+
+          const data = await res.json();
+          const items = data.items || [];
+          allItems.push(...items);
+
+          if (items.length < fetchPageSize) break;
+          if (data.requestToken) {
+            page++;
+          } else {
+            break;
+          }
+        }
+        return allItems;
+      };
+
+      const [sentItems, recvItems] = await Promise.all([
+        fetchAllDeRows('WhatsApp_Sent_Messages'),
+        fetchAllDeRows('WhatsApp_Received_Messages'),
       ]);
 
-      const sentData = sentRes.ok ? await sentRes.json() : { items: [] };
-      const recvData = recvRes.ok ? await recvRes.json() : { items: [] };
+      const sentData = { items: sentItems };
+      const recvData = { items: recvItems };
+
 
       const messages: WorkspaceMessage[] = [];
 
+function getFieldValue(row: any, fieldName: string): string {
+  if (!row) return '';
+  const lowerKey = fieldName.toLowerCase();
+  
+  const searchObj = (obj: any) => {
+    if (!obj) return null;
+    const key = Object.keys(obj).find(k => k.toLowerCase() === lowerKey);
+    return key ? obj[key] : null;
+  };
+
+  return searchObj(row.keys) || searchObj(row.values) || searchObj(row) || '';
+}
+
       (sentData.items || []).forEach((item: any) => {
-        const phone = item.keys?.Phone || item.values?.Phone || item.Phone;
-        if (!params.phoneNumber || phone === params.phoneNumber) {
+        const phone = getFieldValue(item, 'Phone');
+        const wamid = getFieldValue(item, 'WaMid');
+        const content = getFieldValue(item, 'MessageContent') || `[Template: ${getFieldValue(item, 'TemplateName')}]`;
+        const timestamp = getFieldValue(item, 'SentTime') || getFieldValue(item, 'CreatedDate') || new Date().toISOString();
+        const status = (getFieldValue(item, 'Status') || 'SENT').toUpperCase();
+
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        const cleanParamPhone = (params.phoneNumber || '').replace(/[^0-9]/g, '');
+        const matches = !cleanParamPhone || (cleanPhone.length >= 10 && cleanParamPhone.length >= 10 && (cleanPhone.endsWith(cleanParamPhone.slice(-10)) || cleanParamPhone.endsWith(cleanPhone.slice(-10))));
+
+        if (matches) {
           messages.push({
-            id: item.keys?.WaMid || item.values?.WaMid || `sent-${Math.random()}`,
+            id: wamid || `sent-${Math.random()}`,
             senderId: 'sfmc-system',
             recipientId: phone,
-            content: item.values?.MessageContent || item.MessageContent || '',
-            timestamp: item.values?.SentTime || new Date().toISOString(),
-            status: (item.values?.Status || 'SENT').toUpperCase(),
+            content,
+            timestamp,
+            status: status as any,
             direction: 'OUTBOUND',
           });
         }
       });
 
       (recvData.items || []).forEach((item: any) => {
-        const phone = item.keys?.Phone || item.values?.Phone || item.Phone;
-        if (!params.phoneNumber || phone === params.phoneNumber) {
+        const phone = getFieldValue(item, 'Phone');
+        const wamid = getFieldValue(item, 'WaMid');
+        const content = getFieldValue(item, 'MessageContent');
+        const timestamp = getFieldValue(item, 'ReceivedTime') || getFieldValue(item, 'CreatedDate') || new Date().toISOString();
+
+        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        const cleanParamPhone = (params.phoneNumber || '').replace(/[^0-9]/g, '');
+        const matches = !cleanParamPhone || (cleanPhone.length >= 10 && cleanParamPhone.length >= 10 && (cleanPhone.endsWith(cleanParamPhone.slice(-10)) || cleanParamPhone.endsWith(cleanPhone.slice(-10))));
+
+        if (matches) {
           messages.push({
-            id: item.keys?.WaMid || item.values?.WaMid || `recv-${Math.random()}`,
+            id: wamid || `recv-${Math.random()}`,
             senderId: phone,
             recipientId: 'sfmc-system',
-            content: item.values?.MessageContent || item.MessageContent || '',
-            timestamp: item.values?.ReceivedTime || new Date().toISOString(),
+            content,
+            timestamp,
             status: 'READ',
             direction: 'INBOUND',
           });

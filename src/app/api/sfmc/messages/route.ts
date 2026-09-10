@@ -29,30 +29,51 @@ async function fetchDeRows(deKey: string, accessToken: string): Promise<any[]> {
   const restBase = (process.env.SFMC_REST_BASE_URI || '').replace(/\/$/, '');
   if (!restBase) throw new Error('SFMC_REST_BASE_URI not configured');
 
-  // Use the Data Extension rowset endpoint
-  const url = `${restBase}/data/v1/customobjectdata/key/${deKey}/rowset?$pageSize=2500`;
-  
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  const allItems: any[] = [];
+  let page = 1;
+  const pageSize = 2500;
+  const maxPages = 20; // Safety limit to prevent infinite loops
 
-  if (response.status === 401) {
-    invalidateSfmcToken();
-    throw new Error('SFMC token expired');
+  while (page <= maxPages) {
+    const url = `${restBase}/data/v1/customobjectdata/key/${deKey}/rowset?$pageSize=${pageSize}&$page=${page}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.status === 401) {
+      invalidateSfmcToken();
+      throw new Error('SFMC token expired');
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SFMC Messages] Failed to fetch ${deKey} (page ${page}):`, response.status, text);
+      throw new Error(`SFMC DE fetch failed (${response.status})`);
+    }
+
+    const data = await response.json();
+    const items = data.items || [];
+    allItems.push(...items);
+
+    console.log(`[SFMC Messages] Fetched page ${page} of ${deKey}: ${items.length} rows (total so far: ${allItems.length})`);
+
+    // If we got fewer items than pageSize, we've reached the last page
+    if (items.length < pageSize) break;
+
+    // Check for continuation token
+    if (data.requestToken) {
+      page++;
+    } else {
+      break;
+    }
   }
 
-  if (!response.ok) {
-    const text = await response.text();
-    console.error(`[SFMC Messages] Failed to fetch ${deKey}:`, response.status, text);
-    throw new Error(`SFMC DE fetch failed (${response.status})`);
-  }
-
-  const data = await response.json();
-  return data.items || [];
+  return allItems;
 }
 
 function getFieldValue(row: any, fieldName: string): string {
@@ -90,12 +111,13 @@ export async function GET(request: NextRequest) {
     const sentMessages: SfmcMessage[] = sentRows.map((row: any, i: number) => {
       const phone = getFieldValue(row, 'Phone');
       const wamid = getFieldValue(row, 'WaMid');
+      const ck = getFieldValue(row, 'ContactKey');
       return {
         id: wamid || `sfmc-sent-${i}`,
         direction: 'sent' as const,
         body: getFieldValue(row, 'MessageContent') || `[Template: ${getFieldValue(row, 'TemplateName')}]`,
         timestamp: getFieldValue(row, 'SentTime') || new Date().toISOString(),
-        contactKey: getFieldValue(row, 'ContactKey') || phone,
+        contactKey: (ck && ck.trim() ? ck : phone),
         journeyName: getFieldValue(row, 'JourneyName') || '',
         templateName: getFieldValue(row, 'TemplateName') || '',
         status: getFieldValue(row, 'Status') || 'sent',
@@ -111,18 +133,19 @@ export async function GET(request: NextRequest) {
     const receivedMessages: SfmcMessage[] = receivedRows.map((row: any, i: number) => {
       const phone = getFieldValue(row, 'Phone');
       const wamid = getFieldValue(row, 'WaMid');
+      const cn = getFieldValue(row, 'ContactName');
       return {
         id: wamid || `sfmc-recv-${i}`,
         direction: 'received' as const,
         body: getFieldValue(row, 'MessageContent') || '',
         timestamp: getFieldValue(row, 'ReceivedTime') || new Date().toISOString(),
-        contactKey: getFieldValue(row, 'ContactName') || phone,
+        contactKey: (cn && cn.trim() ? cn : phone),
         journeyName: '',
         templateName: '',
         status: 'received',
         source: 'sfmc' as const,
         phone,
-        contactName: getFieldValue(row, 'ContactName'),
+        contactName: cn,
         messageType: getFieldValue(row, 'MessageType'),
         wamid,
       };
@@ -133,10 +156,14 @@ export async function GET(request: NextRequest) {
     // Filter by contact key if provided (match on phone or contactKey)
     if (contactKey) {
       const normalized = contactKey.replace(/[^0-9]/g, '');
-      allMessages = allMessages.filter(m => {
-        const mPhone = (m.phone || m.contactKey || '').replace(/[^0-9]/g, '');
-        return mPhone.includes(normalized) || normalized.includes(mPhone);
-      });
+      if (normalized.length >= 10) {
+        const last10 = normalized.slice(-10);
+        allMessages = allMessages.filter(m => {
+          const mPhone = (m.phone || m.contactKey || '').replace(/[^0-9]/g, '');
+          if (!mPhone || mPhone.length < 10) return false;
+          return mPhone.endsWith(last10) || last10.endsWith(mPhone.slice(-10));
+        });
+      }
     }
 
     // Sort by timestamp descending
