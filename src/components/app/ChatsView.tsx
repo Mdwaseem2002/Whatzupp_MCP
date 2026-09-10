@@ -189,18 +189,37 @@ export default function ChatsView() {
                     });
                   });
 
-                  setMessages(prev => {
-                    const merged = { ...initialMessages };
-                    Object.keys(prev).forEach(key => {
-                      if (prev[key] && prev[key].length > 1) {
-                        merged[key] = prev[key];
-                      }
-                    });
-                    return merged;
-                  });
+                  setMessages(prev => ({ ...initialMessages, ...prev }));
                 }
               })
               .catch(err => console.error('Failed to hydrate messages from SFMC:', err));
+          } else {
+            // Hydrate messages for Sales Cloud workspace contacts
+            Promise.all(
+              wsContacts.map(async c => {
+                if (!c.phoneNumber) return null;
+                try {
+                  const res = await fetch(`/api/conversations/${c.phoneNumber}/messages?workspaceId=${wsId}`, {
+                    headers: { 'X-Workspace-Key': wsKey }
+                  });
+                  if (res.ok) {
+                    const resData = await res.json();
+                    if (resData.messages && Array.isArray(resData.messages)) {
+                      return { phone: c.phoneNumber, msgs: resData.messages };
+                    }
+                  }
+                } catch (e) { /* ignore */ }
+                return null;
+              })
+            ).then(results => {
+              const scMessages: Record<string, Message[]> = {};
+              results.forEach(r => {
+                if (r && r.msgs && r.msgs.length > 0) {
+                  scMessages[r.phone] = r.msgs;
+                }
+              });
+              setMessages(prev => ({ ...scMessages, ...prev }));
+            });
           }
         } else {
           setAllBackendContacts([]);

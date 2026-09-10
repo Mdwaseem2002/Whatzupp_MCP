@@ -22,30 +22,31 @@ export function useRealtimeMessages(selectedContact: Contact | null) {
       currentPhoneRef.current = normalizedPhone;
     }
 
-    // Initial fetch from SFMC Data Extensions (reliable source)
+    // Initial fetch from conversation messages API (works for Sales Cloud & SFMC)
     const fetchMessages = async () => {
       try {
-        const response = await fetch(`/api/sfmc/messages?contactKey=${normalizedPhone}`);
+        const response = await fetch(`/api/conversations/${normalizedPhone}/messages`);
         const data = await response.json();
         
         if (currentPhoneRef.current === normalizedPhone && data.messages && Array.isArray(data.messages)) {
-          // Filter messages for this specific contact
           const contactMessages = data.messages
-            .filter((m: any) => m.contactKey === normalizedPhone || m.phone === normalizedPhone)
             .map((msg: any) => ({
               id: msg.id,
-              content: msg.body,
+              content: msg.content || msg.body,
               timestamp: msg.timestamp,
-              sender: msg.direction === 'sent' ? 'user' : 'contact',
-              status: msg.status === 'read' ? 'read' : msg.status === 'delivered' ? 'delivered' : 'sent',
+              sender: msg.sender || (msg.direction === 'sent' || msg.direction === 'OUTBOUND' ? 'user' : 'contact'),
+              status: msg.status || 'sent',
               recipientId: normalizedPhone,
+              mediaType: msg.mediaType,
+              mediaId: msg.mediaId,
+              mediaUrl: msg.mediaUrl,
             }))
             .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
           setMessages(contactMessages);
         }
       } catch (error) {
-        console.error('Error fetching messages from SFMC:', error);
+        console.error('Error fetching conversation messages:', error);
       }
     };
 
@@ -102,19 +103,21 @@ export function useRealtimeMessages(selectedContact: Contact | null) {
     const pollMessages = async () => {
       if (isCancelled) return;
       try {
-        const response = await fetch(`/api/sfmc/messages?contactKey=${normalizedPhone}`);
+        const response = await fetch(`/api/conversations/${normalizedPhone}/messages`);
         const data = await response.json();
         
         if (currentPhoneRef.current === normalizedPhone && data.messages && Array.isArray(data.messages)) {
           const fetchedContactMessages = data.messages
-            .filter((m: any) => m.contactKey === normalizedPhone || m.phone === normalizedPhone)
             .map((msg: any) => ({
               id: msg.id,
-              content: msg.body,
+              content: msg.content || msg.body,
               timestamp: msg.timestamp,
-              sender: msg.direction === 'sent' ? 'user' : 'contact',
-              status: msg.status === 'read' ? 'read' : msg.status === 'delivered' ? 'delivered' : 'sent',
+              sender: msg.sender || (msg.direction === 'sent' || msg.direction === 'OUTBOUND' ? 'user' : 'contact'),
+              status: msg.status || 'sent',
               recipientId: normalizedPhone,
+              mediaType: msg.mediaType,
+              mediaId: msg.mediaId,
+              mediaUrl: msg.mediaUrl,
             }));
 
           setMessages(prev => {

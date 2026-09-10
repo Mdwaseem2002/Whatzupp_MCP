@@ -30,17 +30,33 @@ const ChatList: React.FC<ChatListProps> = ({
   const [editName, setEditName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const getLastMessage = (phoneNumber: string): { text: string; time: string; isTemplate: boolean } => {
+  const getLastMessage = (phoneNumber: string): { text: string; time: string; timestamp: number; isTemplate: boolean } => {
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
     const contactMessages = messages[normalizedPhone] || messages[phoneNumber] || [];
     if (contactMessages.length === 0) {
-      return { text: 'No messages yet', time: '', isTemplate: false };
+      return { text: 'No messages yet', time: '', timestamp: 0, isTemplate: false };
     }
     const lastMsg = contactMessages[contactMessages.length - 1];
-    const isTemplate = /^\[Template:/.test(lastMsg.content || '');
+    const rawContent = lastMsg.content || '';
+
+    const matchMedia = rawContent.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]/i);
+    let displayText = rawContent;
+    if (matchMedia) {
+      const mediaType = matchMedia[1].toLowerCase();
+      const caption = rawContent.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]\s*/i, '').trim();
+      if (mediaType === 'image') displayText = caption ? `📷 ${caption}` : '📷 Photo';
+      else if (mediaType === 'video') displayText = caption ? `🎥 ${caption}` : '🎥 Video';
+      else if (mediaType === 'document') displayText = caption ? `📄 ${caption}` : '📄 Document';
+      else if (mediaType === 'audio') displayText = caption ? `🎙️ ${caption}` : '🎙️ Audio';
+    }
+
+    const isTemplate = /^\[Template:/.test(rawContent);
+    const msgTime = lastMsg.timestamp ? new Date(lastMsg.timestamp).getTime() : 0;
+
     return {
-      text: lastMsg.content.length > 35 ? lastMsg.content.substring(0, 32) + '...' : lastMsg.content,
+      text: displayText.length > 35 ? displayText.substring(0, 32) + '...' : displayText,
       time: formatTimestamp(lastMsg.timestamp),
+      timestamp: isNaN(msgTime) ? 0 : msgTime,
       isTemplate,
     };
   };
@@ -87,7 +103,13 @@ const ChatList: React.FC<ChatListProps> = ({
   const sortedContacts = [...filteredContacts].sort((a, b) => {
     const aUnread = unreadCounts[a.phoneNumber.replace(/^\+/, '')] || 0;
     const bUnread = unreadCounts[b.phoneNumber.replace(/^\+/, '')] || 0;
-    return bUnread - aUnread;
+    if (bUnread !== aUnread) {
+      return bUnread - aUnread;
+    }
+
+    const aTime = getLastMessage(a.phoneNumber).timestamp;
+    const bTime = getLastMessage(b.phoneNumber).timestamp;
+    return bTime - aTime;
   });
 
   return (
