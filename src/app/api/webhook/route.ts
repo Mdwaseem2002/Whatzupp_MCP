@@ -209,27 +209,61 @@ export async function POST(request: Request) {
                   mediaData
                 };
                 
-                const storeResponse = await fetch(
-                  `${appUrl}/api/messages`,
-                  {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "x-internal-secret": process.env.JWT_SECRET || 'fallback-secret',
-                    },
-                    body: JSON.stringify({
-                      phoneNumber: message.from,
-                      message: finalMessageObj,
-                    }),
-                  }
+                const normalizedPhone = (message.from as string).replace(/^\+/, '');
+                const messageId = (message.id as string) || `wamid_${Date.now()}`;
+                const msgIsoTimestamp = message.timestamp
+                  ? new Date(Number(message.timestamp) * 1000).toISOString()
+                  : new Date().toISOString();
+
+                const messageData = {
+                  id: messageId,
+                  content: contentText,
+                  timestamp: msgIsoTimestamp,
+                  sender: 'contact',
+                  status: MessageStatus.DELIVERED,
+                  recipientId: normalizedPhone,
+                  contactPhoneNumber: normalizedPhone,
+                  originalId: messageId,
+                  conversationId: normalizedPhone,
+                  mediaType: mediaType || 'text',
+                  mediaId,
+                  mimeType,
+                  filename,
+                  caption,
+                  mediaData
+                };
+
+                // Direct MongoDB Message Save
+                await MessageModel.updateOne(
+                  { id: messageId },
+                  { 
+                    $setOnInsert: messageData,
+                    $set: { status: MessageStatus.DELIVERED }
+                  },
+                  { upsert: true }
                 );
 
-                const storeResult = await storeResponse.json();
-                console.log("[webhook] Message Storage Result:", storeResult);
+                // Direct MongoDB Conversation Update
+                await Conversation.updateOne(
+                  { phoneNumber: normalizedPhone },
+                  { 
+                    $set: { 
+                      lastMessage: contentText,
+                      lastMessageTimestamp: msgIsoTimestamp 
+                    },
+                    $inc: { unreadCount: 1 },
+                    $setOnInsert: { contactName: normalizedPhone }
+                  },
+                  { upsert: true }
+                );
+
+                console.log("[webhook] Message stored successfully in MongoDB:", messageId);
+                const storeResult = { success: true, message: messageData };
 
                 // --- Emit SSE for real-time frontend update ---
-                if (storeResult.success) {
-                  const normalizedPhone = (message.from as string).replace(/^\+/, '');
+                const host = request.headers.get('host') || 'localhost:3000';
+                const protocol = host.includes('localhost') ? 'http' : 'https';
+                const appUrl = process.env.NEXT_PUBLIC_APP_URL || `${protocol}://${host}`;
 
                   // Extract contact name for notification display
                   const contacts = value.contacts as Array<Record<string, unknown>> | undefined;

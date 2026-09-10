@@ -116,6 +116,20 @@ export default class WhatzuppChatPanel extends LightningElement {
         if (this.recordId) {
             this.fetchMessages();
         }
+
+        // Auto-poll for incoming WhatsApp replies every 5 seconds
+        // eslint-disable-next-line @lwc/lwc/no-async-operation
+        this._pollTimer = setInterval(() => {
+            if (this.contactPhone && !this.isSending) {
+                this.fetchMessagesSilently();
+            }
+        }, 5000);
+    }
+
+    disconnectedCallback() {
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+        }
     }
 
     get headerTitle() {
@@ -208,6 +222,36 @@ export default class WhatzuppChatPanel extends LightningElement {
         } finally {
             this.isLoading = false;
             this.scrollToBottom();
+        }
+    }
+
+    async fetchMessagesSilently() {
+        if (!this.contactPhone) return;
+        try {
+            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages`;
+            const res = await fetch(endpoint, {
+                headers: this._getHeaders()
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const msgs = data.messages || data || [];
+                const formatted = (Array.isArray(msgs) ? msgs : []).map(m => ({
+                    ...m,
+                    formattedTime: new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    isOutbound: m.direction === 'OUTBOUND' || m.sender === 'user',
+                    bubbleClass: `msg-bubble ${(m.direction === 'OUTBOUND' || m.sender === 'user') ? 'msg-outbound' : 'msg-inbound'}`
+                }));
+
+                const lastOld = this.messages.length > 0 ? this.messages[this.messages.length - 1].id : null;
+                const lastNew = formatted.length > 0 ? formatted[formatted.length - 1].id : null;
+
+                if (formatted.length !== this.messages.length || lastOld !== lastNew) {
+                    this.messages = formatted;
+                    this.scrollToBottom();
+                }
+            }
+        } catch (e) {
+            // silent catch
         }
     }
 
