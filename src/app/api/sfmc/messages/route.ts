@@ -88,6 +88,42 @@ function getFieldValue(row: any, fieldName: string): string {
   return searchObj(row.keys) || searchObj(row.values) || searchObj(row) || '';
 }
 
+/**
+ * Normalize SFMC timestamps to ISO 8601.
+ * SFMC DE returns dates in US locale format: "M/D/YYYY h:mm:ss AM/PM"
+ * This function handles both ISO and US-locale formats.
+ */
+function normalizeTimestamp(raw: string): string {
+  if (!raw) return new Date().toISOString();
+  
+  // Already ISO 8601 (contains T or starts with YYYY-)
+  if (raw.includes('T') || /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  
+  // SFMC US locale: "M/D/YYYY h:mm:ss AM/PM" or "M/D/YYYY h:mm:ss"
+  const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?$/i);
+  if (match) {
+    const [, month, day, year, hourStr, min, sec, ampm] = match;
+    let hour = parseInt(hourStr, 10);
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
+      if (ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
+    }
+    // Construct ISO string (SFMC times are UTC)
+    const isoStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${String(hour).padStart(2, '0')}:${min}:${sec}.000Z`;
+    const d = new Date(isoStr);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  
+  // Fallback: try native parsing
+  const fallback = new Date(raw);
+  if (!isNaN(fallback.getTime())) return fallback.toISOString();
+  
+  return new Date().toISOString();
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -116,7 +152,7 @@ export async function GET(request: NextRequest) {
         id: wamid || `sfmc-sent-${i}`,
         direction: 'sent' as const,
         body: getFieldValue(row, 'MessageContent') || `[Template: ${getFieldValue(row, 'TemplateName')}]`,
-        timestamp: getFieldValue(row, 'SentTime') || new Date().toISOString(),
+        timestamp: normalizeTimestamp(getFieldValue(row, 'SentTime')),
         contactKey: (ck && ck.trim() ? ck : phone),
         journeyName: getFieldValue(row, 'JourneyName') || '',
         templateName: getFieldValue(row, 'TemplateName') || '',
@@ -138,7 +174,7 @@ export async function GET(request: NextRequest) {
         id: wamid || `sfmc-recv-${i}`,
         direction: 'received' as const,
         body: getFieldValue(row, 'MessageContent') || '',
-        timestamp: getFieldValue(row, 'ReceivedTime') || new Date().toISOString(),
+        timestamp: normalizeTimestamp(getFieldValue(row, 'ReceivedTime')),
         contactKey: (cn && cn.trim() ? cn : phone),
         journeyName: '',
         templateName: '',

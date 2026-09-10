@@ -185,11 +185,43 @@ function getFieldValue(row: any, fieldName: string): string {
   return searchObj(row.keys) || searchObj(row.values) || searchObj(row) || '';
 }
 
+/**
+ * Normalize SFMC timestamps to ISO 8601.
+ * SFMC DE returns dates in US locale format: "M/D/YYYY h:mm:ss AM/PM"
+ */
+function normalizeTimestamp(raw: string): string {
+  if (!raw) return new Date().toISOString();
+  
+  // Already ISO 8601
+  if (raw.includes('T') || /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  
+  // SFMC US locale: "M/D/YYYY h:mm:ss AM/PM"
+  const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?$/i);
+  if (match) {
+    const [, month, day, year, hourStr, min, sec, ampm] = match;
+    let hour = parseInt(hourStr, 10);
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
+      if (ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
+    }
+    const isoStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${String(hour).padStart(2, '0')}:${min}:${sec}.000Z`;
+    const d = new Date(isoStr);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  
+  const fallback = new Date(raw);
+  if (!isNaN(fallback.getTime())) return fallback.toISOString();
+  return new Date().toISOString();
+}
+
       (sentData.items || []).forEach((item: any) => {
         const phone = getFieldValue(item, 'Phone');
         const wamid = getFieldValue(item, 'WaMid');
         const content = getFieldValue(item, 'MessageContent') || `[Template: ${getFieldValue(item, 'TemplateName')}]`;
-        const timestamp = getFieldValue(item, 'SentTime') || getFieldValue(item, 'CreatedDate') || new Date().toISOString();
+        const timestamp = normalizeTimestamp(getFieldValue(item, 'SentTime') || getFieldValue(item, 'CreatedDate'));
         const status = (getFieldValue(item, 'Status') || 'SENT').toUpperCase();
 
         const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -213,7 +245,7 @@ function getFieldValue(row: any, fieldName: string): string {
         const phone = getFieldValue(item, 'Phone');
         const wamid = getFieldValue(item, 'WaMid');
         const content = getFieldValue(item, 'MessageContent');
-        const timestamp = getFieldValue(item, 'ReceivedTime') || getFieldValue(item, 'CreatedDate') || new Date().toISOString();
+        const timestamp = normalizeTimestamp(getFieldValue(item, 'ReceivedTime') || getFieldValue(item, 'CreatedDate'));
 
         const cleanPhone = phone.replace(/[^0-9]/g, '');
         const cleanParamPhone = (params.phoneNumber || '').replace(/[^0-9]/g, '');

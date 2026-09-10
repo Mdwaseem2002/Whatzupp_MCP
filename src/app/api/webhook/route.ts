@@ -165,14 +165,32 @@ export async function POST(request: Request) {
                 }
 
                 // ----- Step 2: Check SFMC Workspace Match -----
+                // Always write to SFMC DE when SFMC is configured, regardless of contact match.
+                // This prevents data loss — inbound messages should always be recorded.
                 let hasSfmcMatch = false;
-                try {
-                  const sfmcContacts = await sfmcConnector.fetchContacts({ search: normalizedPhone, limit: 1 });
-                  if (sfmcContacts && sfmcContacts.length > 0 && sfmcContacts[0].phoneNumber.replace(/^\+/, '') === normalizedPhone) {
+                const sfmcConfigured = !!(process.env.SFMC_REST_BASE_URI && process.env.SFMC_CLIENT_ID);
+                
+                if (sfmcConfigured) {
+                  try {
+                    const sfmcContacts = await sfmcConnector.fetchContacts({ search: normalizedPhone, limit: 5 });
+                    if (sfmcContacts && sfmcContacts.length > 0) {
+                      // Use last-10-digit matching (consistent with rest of codebase)
+                      const last10 = normalizedPhone.replace(/[^0-9]/g, '').slice(-10);
+                      hasSfmcMatch = sfmcContacts.some(c => {
+                        const cPhone = (c.phoneNumber || '').replace(/[^0-9]/g, '');
+                        return cPhone.length >= 10 && (cPhone.endsWith(last10) || last10.endsWith(cPhone.slice(-10)));
+                      });
+                    }
+                  } catch (e) {
+                    console.warn('[webhook] SFMC resolveContact check failed:', e);
+                  }
+
+                  // Even if no matching contact, still write to SFMC DE when SFMC is configured
+                  // This ensures we never lose inbound messages
+                  if (!hasSfmcMatch) {
+                    console.log(`[webhook] No exact SFMC contact match for ${normalizedPhone}, but SFMC is configured. Writing to DE anyway.`);
                     hasSfmcMatch = true;
                   }
-                } catch (e) {
-                  console.warn('[webhook] SFMC resolveContact check failed:', e);
                 }
 
                 // ----- Step 3: Conditional Fan-Out Write -----
@@ -189,7 +207,7 @@ export async function POST(request: Request) {
                 }
 
                 if (hasSfmcMatch) {
-                  console.log(`[webhook] Matching subscriber found in SFMC for ${normalizedPhone}. Writing to WhatsApp_Received_Messages DE.`);
+                  console.log(`[webhook] Writing inbound message to WhatsApp_Received_Messages DE for ${normalizedPhone}.`);
                   await writeReceivedMessage({
                     WaMid: messageId,
                     Phone: normalizedPhone,

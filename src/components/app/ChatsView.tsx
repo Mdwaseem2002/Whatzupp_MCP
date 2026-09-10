@@ -169,11 +169,28 @@ export default function ChatsView() {
               .then(msgData => {
                 if (msgData.messages && Array.isArray(msgData.messages)) {
                   const initialMessages: Record<string, Message[]> = {};
-                  const sfmcPhones = new Set(wsContacts.map(c => c.phoneNumber));
+                  
+                  // Build a lookup using last-10-digit phone suffixes for fuzzy matching
+                  // SFMC stores phones inconsistently (some with country code, some without)
+                  const phoneSuffixMap = new Map<string, string>(); // last10 -> normalized contact phone
+                  wsContacts.forEach(c => {
+                    const digits = c.phoneNumber.replace(/[^0-9]/g, '');
+                    if (digits.length >= 10) {
+                      phoneSuffixMap.set(digits.slice(-10), c.phoneNumber);
+                    }
+                  });
 
                   msgData.messages.forEach((msg: any) => {
-                    const normPhone = normalizePhone(msg.phone || msg.contactKey);
-                    if (!normPhone || !sfmcPhones.has(normPhone)) return;
+                    const rawPhone = normalizePhone(msg.phone || msg.contactKey);
+                    if (!rawPhone) return;
+                    
+                    // Find matching contact phone using last-10-digit suffix
+                    const digits = rawPhone.replace(/[^0-9]/g, '');
+                    const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+                    const matchedPhone = phoneSuffixMap.get(last10);
+                    
+                    if (!matchedPhone) return;
+                    const normPhone = matchedPhone;
 
                     if (!initialMessages[normPhone]) {
                       initialMessages[normPhone] = [];
@@ -187,6 +204,13 @@ export default function ChatsView() {
                       recipientId: normPhone,
                       attachments: false
                     });
+                  });
+
+                  // Sort each contact's messages by timestamp ascending
+                  Object.keys(initialMessages).forEach(phone => {
+                    initialMessages[phone].sort((a, b) => 
+                      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                    );
                   });
 
                   setMessages(prev => ({ ...initialMessages, ...prev }));
