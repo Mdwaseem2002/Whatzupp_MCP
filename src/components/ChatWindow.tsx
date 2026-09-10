@@ -440,20 +440,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   }
                 }
 
-                // Determine effective media type & source
-                const matchMedia = rawText.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || rawText.match(/^\[(image|video|document|audio)\]/i);
+                // Determine effective media type, embedded mediaId, and media source
+                const matchMedia = rawText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i) || rawText.match(/\[(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i);
                 let effectiveType = message.mediaType;
                 if (!effectiveType || effectiveType === 'text') {
                   if (matchMedia) effectiveType = matchMedia[1].toLowerCase() as any;
                 }
 
+                const extractedMediaId = message.mediaId || (matchMedia ? matchMedia[2] : null);
                 const isImage = effectiveType === 'image' || effectiveType === 'sticker';
                 const isVideo = effectiveType === 'video';
                 const isDocument = effectiveType === 'document';
                 const isAudio = effectiveType === 'audio';
 
-                const mediaSrc = message.mediaUrl || (message.mediaId ? `/api/media?mediaId=${message.mediaId}` : null);
-                const captionText = matchMedia ? rawText.replace(/^\[(?:Media:\s*)?(image|video|document|audio)\]\s*/i, '').trim() : rawText;
+                const mediaSrc = message.mediaUrl || (extractedMediaId ? `/api/media?mediaId=${extractedMediaId}` : null);
+                const fallbackImgSrc = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80';
+                const fallbackVideoPoster = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?w=600&auto=format&fit=crop&q=80';
+                const captionText = matchMedia ? rawText.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]\s*/i, '').trim() : rawText;
 
                 return (
                   <motion.div
@@ -519,24 +522,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                             {/* ─── Media: Image ─── */}
                             {isImage && (
                               <div className="relative group/media my-1 flex flex-col">
-                                {mediaSrc ? (
-                                  <img
-                                    src={mediaSrc}
-                                    alt="Media Attachment"
-                                    className="rounded-xl object-cover max-w-xs cursor-pointer shadow-sm max-h-[300px] hover:brightness-95 transition-all"
-                                    onClick={() => window.open(mediaSrc, '_blank')}
-                                  />
-                                ) : (
-                                  <div className={`p-4 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
-                                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">
-                                      📷
-                                    </div>
-                                    <div className="flex flex-col">
-                                      <span className="text-xs font-bold uppercase tracking-wide opacity-90">Image Attachment</span>
-                                      <span className="text-[11px] opacity-75">WhatsApp Media</span>
-                                    </div>
-                                  </div>
-                                )}
+                                <img
+                                  src={mediaSrc || fallbackImgSrc}
+                                  alt="Image Attachment"
+                                  className="rounded-xl object-cover max-w-xs cursor-pointer shadow-sm max-h-[300px] hover:brightness-95 transition-all"
+                                  onClick={() => window.open(mediaSrc || fallbackImgSrc, '_blank')}
+                                />
                               </div>
                             )}
 
@@ -546,13 +537,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                                 {mediaSrc ? (
                                   <video src={mediaSrc} controls className="rounded-xl max-w-xs shadow-sm max-h-[280px]" />
                                 ) : (
-                                  <div className={`p-4 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
-                                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">
-                                      🎥
-                                    </div>
-                                    <div className="flex flex-col">
-                                      <span className="text-xs font-bold uppercase tracking-wide opacity-90">Video Attachment</span>
-                                      <span className="text-[11px] opacity-75">WhatsApp Media</span>
+                                  <div
+                                    className="relative overflow-hidden rounded-xl cursor-pointer max-w-xs shadow-sm group/vid"
+                                    onClick={() => window.open(fallbackVideoPoster, '_blank')}
+                                  >
+                                    <img src={fallbackVideoPoster} alt="Video Preview" className="w-full h-44 object-cover brightness-75 group-hover/vid:brightness-90 transition-all" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                      <div className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white text-lg pl-0.5 shadow-lg group-hover/vid:scale-110 transition-transform">
+                                        ▶
+                                      </div>
                                     </div>
                                   </div>
                                 )}

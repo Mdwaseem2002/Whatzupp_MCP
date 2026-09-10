@@ -199,7 +199,7 @@ export default class WhatzuppChatPanel extends LightningElement {
 
     _formatMessageItem(m) {
         const contentText = m.content || '';
-        const matchMedia = contentText.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || contentText.match(/^\[(image|video|document|audio)\]/i);
+        const matchMedia = contentText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i) || contentText.match(/\[(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i);
         let mediaType = m.mediaType;
         if (!mediaType || mediaType === 'text') {
             if (matchMedia) {
@@ -210,9 +210,31 @@ export default class WhatzuppChatPanel extends LightningElement {
         const isImage = mediaType === 'image' || mediaType === 'sticker';
         const isVideo = mediaType === 'video';
         const isDocument = mediaType === 'document';
+
+        const extractedMediaId = m.mediaId || (matchMedia ? matchMedia[2] : null);
+
+        // Fallback preview images/videos if no live binary mediaId is present
+        const fallbackImgSrc = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80';
+        const fallbackVideoPoster = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?w=600&auto=format&fit=crop&q=80';
+
+        let mediaUrl = m.mediaUrl;
+        if (!mediaUrl && extractedMediaId) {
+            mediaUrl = `${this.appBaseUrl}/api/media?mediaId=${extractedMediaId}`;
+        }
+        if (!mediaUrl && isImage) {
+            mediaUrl = fallbackImgSrc;
+        }
+        if (!mediaUrl && isVideo) {
+            mediaUrl = fallbackVideoPoster;
+        }
+
+        let displayContent = contentText;
+        if (matchMedia) {
+            displayContent = contentText.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]\s*/i, '').trim();
+        }
+        const hasText = displayContent.length > 0 && !displayContent.startsWith('[Media:');
         const isText = !isImage && !isVideo && !isDocument;
 
-        const mediaUrl = m.mediaUrl || (m.mediaId ? `${this.appBaseUrl}/api/media?mediaId=${m.mediaId}` : null);
         const fileName = m.filename || (matchMedia && matchMedia[1] ? `${matchMedia[1]}.dat` : 'Document Attachment');
         const isOutbound = m.direction === 'OUTBOUND' || m.sender === 'user';
         const formattedTime = new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -226,6 +248,8 @@ export default class WhatzuppChatPanel extends LightningElement {
             isVideo,
             isDocument,
             isText,
+            hasText,
+            displayContent,
             mediaUrl,
             fileName,
         };

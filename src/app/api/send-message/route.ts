@@ -81,10 +81,14 @@ export async function POST(request: Request) {
     const wamid = data?.messages?.[0]?.id;
 
     if (wamid) {
+      const formattedMediaContent = mediaId
+        ? (message ? `${message}\n[Media: ${mediaType}: ${mediaId}]` : `[Media: ${mediaType}: ${mediaId}]`)
+        : (message || `[Media: ${mediaType}]`);
+
       const sentMessageData = {
         id: wamid,
         localId,
-        content: message || `[Media: ${mediaType}]`,
+        content: formattedMediaContent,
         timestamp: new Date().toISOString(),
         sender: 'user',
         status: 'sent',
@@ -100,7 +104,7 @@ export async function POST(request: Request) {
         await writeSentMessage({
           WaMid: wamid,
           Phone: formattedPhone,
-          MessageContent: message || `[Media: ${mediaType}]`,
+          MessageContent: formattedMediaContent,
           Status: 'sent',
           SentTime: new Date().toISOString(),
           Source: 'manual_send',
@@ -116,7 +120,7 @@ export async function POST(request: Request) {
           const scConnector = new SalesCloudConnector();
           await scConnector.sendMessage({
             recipientPhone: formattedPhone,
-            content: message || `[Media: ${mediaType}]`,
+            content: formattedMediaContent,
           });
         } catch (scErr) {
           console.warn('[send-message] Sales Cloud write failed:', scErr);

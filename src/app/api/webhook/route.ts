@@ -133,7 +133,11 @@ export async function POST(request: Request) {
                   caption = mediaObj?.caption;
                   filename = mediaObj?.filename;
 
-                  if (caption) {
+                  if (mediaId) {
+                    contentText = caption
+                      ? `${caption}\n[Media: ${mediaType}: ${mediaId}]`
+                      : `[Media: ${mediaType}: ${mediaId}]`;
+                  } else if (caption) {
                     contentText = caption;
                   } else {
                     if (message.type === 'document') contentText = `[Document: ${filename || 'file'}]`;
