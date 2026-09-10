@@ -40,7 +40,7 @@ export async function getSfmcAccessToken(): Promise<{ access_token: string; toke
     };
   }
 
-  const authBaseUri = process.env.SFMC_AUTH_BASE_URI;
+  const authBaseUri = (process.env.SFMC_AUTH_BASE_URI || '').replace(/\/$/, '');
   const clientId = process.env.SFMC_CLIENT_ID;
   const clientSecret = process.env.SFMC_CLIENT_SECRET;
 

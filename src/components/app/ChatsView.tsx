@@ -54,30 +54,36 @@ export default function ChatsView() {
   // Build the contacts list for ChatList using ONLY workspace contacts.
   // For each workspace contact, check if there's a matching backend conversation
   // and use the workspace contact's name (not "Unknown" or raw phone number).
+  // ─── STRICT WORKSPACE FILTERING ───
+  // Build the contacts list for ChatList using ONLY contacts belonging to the active workspace.
   const filteredContacts: Contact[] = useMemo(() => {
-    // 1. If we have workspaceContacts (MongoDB enabled), apply strict workspace filtering
-    if (workspaceContacts && workspaceContacts.length > 0) {
-      return workspaceContacts.map(wc => {
-        const normPhone = normalizePhone(wc.phoneNumber);
-        const backendMatch = allBackendContacts.find(
-          bc => normalizePhone(bc.phoneNumber) === normPhone
-        );
+    const wsId = activeWorkspace?.id || 'sfmc-ws-1';
 
-        return {
-          id: backendMatch?.id || wc.id,
-          name: wc.name, 
-          phoneNumber: normPhone,
-          avatar: wc.avatar || backendMatch?.avatar,
-          online: undefined,
-          lastSeen: backendMatch?.lastSeen,
-        } as Contact;
-      });
+    // 1. If we have workspaceContacts matching activeWorkspace.id, use them
+    if (workspaceContacts && workspaceContacts.length > 0) {
+      const matchingWsContacts = workspaceContacts.filter(wc => wc.workspaceId === wsId);
+      if (matchingWsContacts.length > 0) {
+        return matchingWsContacts.map(wc => {
+          const normPhone = normalizePhone(wc.phoneNumber);
+          const backendMatch = allBackendContacts.find(
+            bc => normalizePhone(bc.phoneNumber) === normPhone
+          );
+
+          return {
+            id: backendMatch?.id || wc.id,
+            name: wc.name, 
+            phoneNumber: normPhone,
+            avatar: wc.avatar || backendMatch?.avatar,
+            online: undefined,
+            lastSeen: backendMatch?.lastSeen,
+          } as Contact;
+        });
+      }
     }
 
-    // 2. If workspaceContacts is empty (SFMC-Only mode, MongoDB disabled), 
-    // fallback to displaying all backend contacts fetched from SFMC DEs + optimistic additions
+    // 2. Fallback to allBackendContacts loaded specifically for the active workspace
     return allBackendContacts;
-  }, [workspaceContacts, allBackendContacts]);
+  }, [workspaceContacts, allBackendContacts, activeWorkspace?.id]);
 
   // Clear selected contact when workspace changes
   useEffect(() => {
@@ -104,7 +110,7 @@ export default function ChatsView() {
     }
   }, [incomingMessageEvent]);
 
-  // Load config and hydrate chats from MongoDB on component mount
+  // Load config on mount
   useEffect(() => {
     const savedConfig = localStorage.getItem('whatsappConfig');
     if (savedConfig) {
@@ -112,16 +118,13 @@ export default function ChatsView() {
       if (parsedConfig.accessToken && parsedConfig.phoneNumberId) {
         setConfig(parsedConfig);
       } else {
-        // Saved config is invalid, re-fetch from server
         localStorage.removeItem('whatsappConfig');
       }
     }
 
-    // Always fetch fresh env variables to ensure config is up to date
     fetch('/api/get-env-variables')
       .then(r => r.json())
       .then(data => {
-        // API returns { success: true, env: { accessToken, ... } }
         const token = data.env?.accessToken || data.accessToken || data.config?.accessToken;
         const phoneId = data.env?.phoneNumberId || data.phoneNumberId || data.config?.phoneNumberId;
         if (token && phoneId) {
@@ -131,61 +134,95 @@ export default function ChatsView() {
         }
       })
       .catch(() => {});
+  }, []);
 
-    // Hydrate conversations exclusively from SFMC Data Extensions
-    fetch('/api/sfmc/messages')
-      .then(res => res.json())
-      .then(data => {
-        if (data.messages && Array.isArray(data.messages)) {
-          const initialMessages: Record<string, Message[]> = {};
-          const backendContacts: Contact[] = [];
-          const seenPhones = new Set<string>();
+  // Hydrate conversations according to the ACTIVE WORKSPACE
+  useEffect(() => {
+    const wsId = activeWorkspace?.id || 'sfmc-ws-1';
+    const isSalesCloud = activeWorkspace?.type === 'salescloud' || activeWorkspace?.platform === 'sales_cloud' || wsId === 'salescloud-ws-1';
 
-          // Sort messages by timestamp descending to get the latest message first for preview
-          const sortedMessages = [...data.messages].sort(
-            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-          );
+    // Reset contacts and messages whenever active workspace changes
+    setAllBackendContacts([]);
+    setMessages({});
 
-          sortedMessages.forEach((msg: any) => {
-            const normPhone = normalizePhone(msg.contactKey || msg.phone);
-            if (!normPhone) return;
+    if (isSalesCloud) {
+      // Fetch Sales Cloud contacts & messages from Sales Cloud connector / API endpoint
+      fetch(`/api/workspaces/${wsId}/contacts`, {
+        headers: { 'X-Workspace-Key': process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret' }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.contacts && Array.isArray(data.contacts)) {
+            const scContacts: Contact[] = data.contacts.map((c: any) => ({
+              id: c.id || c.sourceRecordId || c.phoneNumber,
+              name: c.name || c.phoneNumber,
+              phoneNumber: normalizePhone(c.phoneNumber),
+              online: undefined,
+            }));
+            setAllBackendContacts(scContacts);
+          } else {
+            setAllBackendContacts([]);
+          }
+        })
+        .catch(err => {
+          console.log('No Sales Cloud contacts loaded for workspace:', wsId);
+          setAllBackendContacts([]);
+        });
+    } else {
+      // Hydrate conversations exclusively from SFMC Data Extensions
+      fetch('/api/sfmc/messages')
+        .then(res => res.json())
+        .then(data => {
+          if (data.messages && Array.isArray(data.messages)) {
+            const initialMessages: Record<string, Message[]> = {};
+            const backendContacts: Contact[] = [];
+            const seenPhones = new Set<string>();
 
-            if (!seenPhones.has(normPhone)) {
-              seenPhones.add(normPhone);
-              backendContacts.push({
-                id: normPhone,
-                name: msg.contactName || normPhone,
-                phoneNumber: normPhone,
-                online: undefined
-              });
+            const sortedMessages = [...data.messages].sort(
+              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
 
-              initialMessages[normPhone] = [{
-                id: 'preview-' + msg.id,
-                content: msg.body,
-                timestamp: msg.timestamp,
-                sender: msg.direction === 'sent' ? 'user' : 'contact',
-                status: msg.status === 'read' ? MessageStatus.READ : msg.status === 'delivered' ? MessageStatus.DELIVERED : MessageStatus.SENT,
-                recipientId: normPhone,
-                attachments: false
-              }];
-            }
-          });
+            sortedMessages.forEach((msg: any) => {
+              const normPhone = normalizePhone(msg.contactKey || msg.phone);
+              if (!normPhone) return;
 
-          setAllBackendContacts(backendContacts);
+              if (!seenPhones.has(normPhone)) {
+                seenPhones.add(normPhone);
+                backendContacts.push({
+                  id: normPhone,
+                  name: msg.contactName || normPhone,
+                  phoneNumber: normPhone,
+                  online: undefined
+                });
 
-          setMessages(prev => {
-            const merged = { ...initialMessages };
-            Object.keys(prev).forEach(key => {
-              if (prev[key] && prev[key].length > 1) {
-                merged[key] = prev[key];
+                initialMessages[normPhone] = [{
+                  id: 'preview-' + msg.id,
+                  content: msg.body,
+                  timestamp: msg.timestamp,
+                  sender: msg.direction === 'sent' ? 'user' : 'contact',
+                  status: msg.status === 'read' ? MessageStatus.READ : msg.status === 'delivered' ? MessageStatus.DELIVERED : MessageStatus.SENT,
+                  recipientId: normPhone,
+                  attachments: false
+                }];
               }
             });
-            return merged;
-          });
-        }
-      })
-      .catch(err => console.error('Failed to hydrate conversations from SFMC:', err));
-  }, []);
+
+            setAllBackendContacts(backendContacts);
+
+            setMessages(prev => {
+              const merged = { ...initialMessages };
+              Object.keys(prev).forEach(key => {
+                if (prev[key] && prev[key].length > 1) {
+                  merged[key] = prev[key];
+                }
+              });
+              return merged;
+            });
+          }
+        })
+        .catch(err => console.error('Failed to hydrate conversations from SFMC:', err));
+    }
+  }, [activeWorkspace?.id, activeWorkspace?.type]);
 
   // Real-time messages sync
   useEffect(() => {

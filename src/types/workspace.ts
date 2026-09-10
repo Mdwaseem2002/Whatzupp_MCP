@@ -8,6 +8,9 @@ export interface Workspace {
   color: string;      // hex color e.g. '#3b82f6'
   icon: string;       // lucide icon name
   createdAt: string;  // ISO date string
+  platform?: 'sfmc' | 'sales_cloud' | 'manual' | string;
+  type?: 'sfmc' | 'salescloud' | string;
+  connectionStatus?: 'connected' | 'disconnected' | 'syncing' | 'error';
 }
 
 export interface UserProfile {
@@ -54,6 +57,7 @@ export type AppScreen =
   | 'automation'
   | 'analytics'
   | 'sfmc'
+  | 'salescloud'
   | 'settings'
   | 'fast-reply';
 

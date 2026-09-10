@@ -3,12 +3,19 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Enable Server Components (default in Next.js 13+)
   reactStrictMode: true,
+
+  // Pin the Turbopack root to this project directory
+  turbopack: {
+    root: __dirname,
+  },
   
-  // Images configuration
+  // Images configuration (using remotePatterns instead of deprecated domains)
   images: {
-    domains: [
-      'localhost', // For development
-      'api.whatsapp.com', // For WhatsApp profile images
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'api.whatsapp.com',
+      },
     ],
   },
   
@@ -41,26 +48,17 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Allow SFMC to call send-whatsapp cross-origin (JB execute endpoint)
-        source: '/api/send-whatsapp',
+        // Allow cross-origin access for all API routes (e.g. from Salesforce LWC)
+        source: '/api/:path*',
         headers: [
           { key: 'Access-Control-Allow-Origin', value: '*' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' },
-        ],
-      },
-      {
-        // Allow SFMC to fetch templates cross-origin (for activity config UI)
-        source: '/api/templates',
-        headers: [
-          { key: 'Access-Control-Allow-Origin', value: '*' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET, OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: 'Content-Type' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-Requested-With, bypass-tunnel-reminder, Bypass-Tunnel-Reminder, x-workspace-key, X-Workspace-Key, *' },
         ],
       },
       {
         // General security headers for all other routes
-        source: '/((?!jb-activity|api/jb|api/send-whatsapp|api/templates).*)',
+        source: '/((?!jb-activity|api/.*).*)',
         headers: [
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-XSS-Protection', value: '1; mode=block' },

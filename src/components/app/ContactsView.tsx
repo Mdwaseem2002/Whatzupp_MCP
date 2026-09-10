@@ -1,7 +1,7 @@
 'use client';
 
 // src/components/app/ContactsView.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
 import type { WorkspaceContact } from '@/types/workspace';
 import { Search, Plus, Users, Edit2, Trash2, Phone, Mail, Building2, Briefcase, Globe, Users2 as UsersIcon, ShoppingBag, Zap } from 'lucide-react';
@@ -23,13 +23,52 @@ export default function ContactsView() {
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingContact, setEditingContact] = useState<WorkspaceContact | null>(null);
+  const [liveContacts, setLiveContacts] = useState<WorkspaceContact[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!activeWorkspace) return;
+
+    const wsId = activeWorkspace.id;
+    const isSalesCloud = activeWorkspace.type === 'salescloud' || activeWorkspace.platform === 'sales_cloud' || wsId === 'salescloud-ws-1';
+
+    if (isSalesCloud) {
+      fetch(`/api/workspaces/${wsId}/contacts`, {
+        headers: { 'X-Workspace-Key': process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret' },
+        cache: 'no-store'
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.contacts && Array.isArray(data.contacts)) {
+            const formatted: WorkspaceContact[] = data.contacts.map((c: any) => ({
+              id: c.id || c.salesforceRecordId || c.phoneNumber,
+              name: c.name,
+              phoneNumber: c.phoneNumber,
+              email: c.email || '',
+              company: c.company || 'Salesforce',
+              tags: c.salesforceObjectType ? [c.salesforceObjectType] : ['Sales Cloud'],
+              workspaceId: wsId,
+              createdAt: c.lastSyncedAt || new Date().toISOString(),
+            }));
+            setLiveContacts(formatted);
+          } else {
+            setLiveContacts([]);
+          }
+        })
+        .catch(() => setLiveContacts([]));
+    } else {
+      setLiveContacts([]);
+    }
+  }, [activeWorkspace?.id, activeWorkspace?.platform, activeWorkspace?.type, refreshKey]);
 
   if (!activeWorkspace) return null;
 
-  const filtered = activeContacts.filter(c =>
+  const displayContacts = liveContacts.length > 0 ? liveContacts : activeContacts;
+
+  const filtered = displayContacts.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     c.phoneNumber.includes(search) ||
-    c.email.toLowerCase().includes(search.toLowerCase())
+    (c.email && c.email.toLowerCase().includes(search.toLowerCase()))
   );
 
   return (
@@ -148,7 +187,12 @@ export default function ContactsView() {
                   <Edit2 size={14} />
                 </button>
                 <button 
-                  onClick={() => { if (confirm('Delete this contact?')) deleteContact(contact.id); }} 
+                  onClick={async () => {
+                    if (confirm('Delete this contact?')) {
+                      await deleteContact(contact.id);
+                      setRefreshKey(prev => prev + 1);
+                    }
+                  }} 
                   className="w-8 h-8 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 flex items-center justify-center transition-colors"
                   title="Delete Contact"
                 >
@@ -165,17 +209,22 @@ export default function ContactsView() {
         <ContactModal
           workspace={activeWorkspace}
           existingContact={editingContact}
-          onSave={(data) => {
-            if (editingContact) updateContact(editingContact.id, data);
-            else addContact({ ...data, workspaceId: activeWorkspace.id });
+          onSave={async (data) => {
+            if (editingContact) {
+              await updateContact(editingContact.id, data);
+            } else {
+              await addContact({ ...data, workspaceId: activeWorkspace.id });
+            }
             setShowAddModal(false);
             setEditingContact(null);
+            setRefreshKey(prev => prev + 1);
           }}
           onClose={() => { setShowAddModal(false); setEditingContact(null); }}
         />
       )}
     </div>
   );
+
 }
 
 // ─── Contact Modal ───

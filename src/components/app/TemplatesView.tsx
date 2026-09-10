@@ -61,7 +61,9 @@ export default function TemplatesView() {
       const response = await fetch('/api/templates');
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${response.status}`);
+        const metaDetail = errData.details?.error?.message;
+        const msg = metaDetail ? `${errData.error || 'Meta Error'}: ${metaDetail}` : (errData.error || `HTTP ${response.status}`);
+        throw new Error(msg);
       }
       const data = await response.json();
       if (data.success && Array.isArray(data.templates)) {

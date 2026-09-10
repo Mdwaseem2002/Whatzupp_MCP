@@ -6,7 +6,21 @@ import MessageModel from '@/models/Message';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { to, message, mediaId, mediaType, mimeType, filename, localId } = body;
+    const { to, message, mediaId, mediaType, mimeType, filename, localId, workspaceId: bodyWsId } = body;
+    const headerWsId = request.headers.get('x-workspace-id') || request.headers.get('X-Workspace-Id');
+    const targetWorkspaceId = bodyWsId || headerWsId;
+
+    if (targetWorkspaceId) {
+      const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
+      const connector = workspaceRegistry.getConnector(targetWorkspaceId);
+      if (connector) {
+        const result = await connector.sendMessage({
+          recipientPhone: to.replace('+', ''),
+          content: message || '',
+        });
+        return NextResponse.json({ success: true, data: result, workspaceId: targetWorkspaceId });
+      }
+    }
 
     // Always prefer server-side env (updated in real-time via /api/save-env)
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || body.accessToken;

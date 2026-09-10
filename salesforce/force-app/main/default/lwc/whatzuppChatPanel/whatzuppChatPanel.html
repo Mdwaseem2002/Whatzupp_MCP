@@ -1,0 +1,315 @@
+<template>
+    <lightning-card title="WhatZupp WhatsApp Connect" icon-name="custom:custom18">
+        <div slot="actions">
+            <lightning-button-icon 
+                icon-name="utility:settings" 
+                alternative-text="WhatsApp API Configuration" 
+                title="WhatsApp API Configuration"
+                onclick={handleToggleSettings}
+                class="slds-m-right_xx-small"
+            ></lightning-button-icon>
+            <lightning-button-icon 
+                icon-name="utility:refresh" 
+                alternative-text="Refresh Chat" 
+                title="Refresh Chat"
+                onclick={handleRefresh}
+            ></lightning-button-icon>
+        </div>
+
+        <div class="chat-container">
+            <!-- Header Status Bar -->
+            <div class="chat-header">
+                <div class="status-indicator">
+                    <span class="dot"></span>
+                    <span class="phone-label">{headerTitle}</span>
+                </div>
+                <div class="header-right">
+                    <span class="workspace-badge">salescloud-ws-1</span>
+                </div>
+            </div>
+
+            <!-- Loading Spinner -->
+            <template if:true={isLoading}>
+                <lightning-spinner alternative-text="Loading messages..." size="medium"></lightning-spinner>
+            </template>
+
+            <!-- Message List Container -->
+            <div class="message-list" lwc:ref="messageList">
+                <template if:false={hasMessages}>
+                    <div class="empty-state">
+                        <div class="empty-icon">💬</div>
+                        <p class="empty-title">No WhatsApp messages yet</p>
+                        <p class="sub-text">Send a text message or a template to start chatting!</p>
+                    </div>
+                </template>
+
+                <template for:each={messages} for:item="msg">
+                    <div key={msg.id} class={msg.bubbleClass}>
+                        <div class="msg-content">{msg.content}</div>
+                        <div class="msg-meta">
+                            <span class="msg-time">{msg.formattedTime}</span>
+                            <template if:true={msg.isOutbound}>
+                                <span class="msg-status">✓✓</span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Upload Loading Overlay -->
+            <template if:true={isUploading}>
+                <div class="upload-indicator">
+                    <lightning-spinner alternative-text="Uploading file..." size="small"></lightning-spinner>
+                    <span>Uploading {uploadFileName}...</span>
+                </div>
+            </template>
+
+            <!-- ─── EMOJI PICKER POPUP ─── -->
+            <template if:true={showEmoji}>
+                <div class="emoji-picker-panel">
+                    <div class="panel-header">
+                        <span class="panel-title">Choose Emoji</span>
+                        <button class="close-btn" onclick={handleCloseEmoji}>✕</button>
+                    </div>
+                    <!-- Category Tabs -->
+                    <div class="emoji-tabs">
+                        <template for:each={emojiCategories} for:item="cat">
+                            <button 
+                                key={cat.name} 
+                                class={cat.tabClass} 
+                                data-category={cat.name}
+                                onclick={handleEmojiCategorySelect}
+                                title={cat.name}
+                            >
+                                {cat.icon}
+                            </button>
+                        </template>
+                    </div>
+                    <!-- Emoji Grid -->
+                    <div class="emoji-grid">
+                        <template for:each={activeEmojis} for:item="emo">
+                            <button 
+                                key={emo} 
+                                class="emoji-item" 
+                                data-emoji={emo} 
+                                onclick={handleEmojiSelect}
+                            >
+                                {emo}
+                            </button>
+                        </template>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ─── TEMPLATE SELECTION PANEL ─── -->
+            <template if:true={showTemplates}>
+                <div class="template-panel">
+                    <div class="panel-header">
+                        <span class="panel-title">📋 WhatsApp Templates</span>
+                        <button class="close-btn" onclick={handleCloseTemplates}>✕</button>
+                    </div>
+
+                    <!-- Search Input -->
+                    <div class="template-search-box">
+                        <lightning-input 
+                            type="search" 
+                            variant="label-hidden" 
+                            placeholder="Search templates..." 
+                            value={templateSearchQuery}
+                            onchange={handleTemplateSearch}
+                        ></lightning-input>
+                    </div>
+
+                    <!-- Template Loading -->
+                    <template if:true={templatesLoading}>
+                        <div class="template-loading">
+                            <lightning-spinner alternative-text="Loading templates..." size="small"></lightning-spinner>
+                            <p>Loading WhatsApp Templates from Meta...</p>
+                        </div>
+                    </template>
+
+                    <!-- Template Error -->
+                    <template if:true={templatesError}>
+                        <div class="template-error-box">
+                            <p>⚠️ {templatesError}</p>
+                            <button class="retry-btn" onclick={fetchTemplates}>Retry</button>
+                        </div>
+                    </template>
+
+                    <!-- Template List -->
+                    <template if:false={templatesLoading}>
+                        <template if:false={templatesError}>
+                            <div class="template-list-container">
+                                <template if:false={hasTemplates}>
+                                    <div class="no-templates">No matching templates found</div>
+                                </template>
+
+                                <template for:each={filteredTemplates} for:item="tpl">
+                                    <div 
+                                        key={tpl.id} 
+                                        class="template-card" 
+                                        data-id={tpl.id} 
+                                        onclick={handleSelectTemplate}
+                                    >
+                                        <div class="template-card-header">
+                                            <span class="template-name">{tpl.name}</span>
+                                            <span class={tpl.categoryClass}>{tpl.category}</span>
+                                        </div>
+                                        <div class="template-body-preview">{tpl.bodyPreview}</div>
+                                        <div class="template-meta-row">
+                                            <span class="template-lang">🌐 {tpl.language}</span>
+                                            <span class="template-status-dot">APPROVED</span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </template>
+
+                    <!-- Selected Template Preview & Send Bar -->
+                    <template if:true={selectedTemplate}>
+                        <div class="template-preview-bar">
+                            <div class="preview-title">Selected: <strong>{selectedTemplate.name}</strong></div>
+                            <lightning-button 
+                                variant="brand" 
+                                label="Send Template" 
+                                icon-name="utility:send" 
+                                onclick={handleSendTemplate}
+                                disabled={isSending}
+                                class="send-tpl-btn"
+                            ></lightning-button>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <!-- Hidden File Input for Attachments -->
+            <input 
+                type="file" 
+                class="file-input-hidden" 
+                onchange={handleFileChange} 
+                style="display:none;" 
+            />
+
+            <!-- Chat Footer / Action Toolbar -->
+            <div class="chat-footer">
+                <div class="toolbar-row">
+                    <!-- Template Toggle Button -->
+                    <lightning-button-icon 
+                        icon-name="utility:layout" 
+                        alternative-text="Templates" 
+                        title="Choose WhatsApp Template"
+                        onclick={handleToggleTemplates}
+                        class="tool-icon-btn"
+                    ></lightning-button-icon>
+
+                    <!-- Emoji Toggle Button -->
+                    <lightning-button-icon 
+                        icon-name="utility:emoji" 
+                        alternative-text="Emojis" 
+                        title="Add Emoji"
+                        onclick={handleToggleEmoji}
+                        class="tool-icon-btn"
+                    ></lightning-button-icon>
+
+                    <!-- Attach File Button -->
+                    <lightning-button-icon 
+                        icon-name="utility:attach" 
+                        alternative-text="Attach File" 
+                        title="Attach Document / Media"
+                        onclick={handleAttachClick}
+                        class="tool-icon-btn"
+                    ></lightning-button-icon>
+                </div>
+
+                <div class="input-row">
+                    <lightning-input 
+                        type="text" 
+                        variant="label-hidden" 
+                        placeholder="Type a WhatsApp message..." 
+                        value={newMessageText}
+                        onchange={handleInputChange}
+                        onkeyup={handleKeyUp}
+                        class="chat-input"
+                    ></lightning-input>
+                    <lightning-button 
+                        variant="brand" 
+                        label="Send" 
+                        icon-name="utility:send" 
+                        onclick={handleSend}
+                        disabled={isSending}
+                        class="send-btn"
+                    ></lightning-button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── SETTINGS MODAL (WhatsApp API Configuration) ─── -->
+        <template if:true={showSettings}>
+            <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open slds-modal_small">
+                <div class="slds-modal__container">
+                    <!-- Modal Header -->
+                    <header class="slds-modal__header modal-custom-header">
+                        <h2 class="slds-modal__title slds-hyphenate">⚙️ WhatsApp API Configuration</h2>
+                        <p class="modal-sub">Configure server endpoint and temporary access token</p>
+                    </header>
+
+                    <!-- Modal Body -->
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <div class="settings-form">
+                            <div class="slds-form-element slds-m-bottom_small">
+                                <label class="slds-form-element__label">WhatZupp App URL</label>
+                                <div class="slds-form-element__control">
+                                    <input 
+                                        type="text" 
+                                        class="slds-input" 
+                                        value={settingsAppUrl} 
+                                        onchange={handleSettingsAppUrl}
+                                        placeholder="http://localhost:3000"
+                                    />
+                                </div>
+                                <span class="field-help">Next.js backend app URL (e.g. locathost:3000 or tunnel URL)</span>
+                            </div>
+
+                            <div class="slds-form-element slds-m-bottom_small">
+                                <label class="slds-form-element__label">Meta Temporary / Permanent Access Token</label>
+                                <div class="slds-form-element__control">
+                                    <textarea 
+                                        class="slds-textarea token-textarea" 
+                                        onchange={handleSettingsAccessToken}
+                                        placeholder="Paste Meta EAAG... token here"
+                                        rows="3"
+                                    >{settingsAccessToken}</textarea>
+                                </div>
+                                <span class="field-help">Required when Temporary Token expires (lasts 24 hours). Updates `.env.local` directly.</span>
+                            </div>
+
+                            <div class="slds-form-element slds-m-bottom_small">
+                                <label class="slds-form-element__label">Phone Number ID</label>
+                                <div class="slds-form-element__control">
+                                    <input 
+                                        type="text" 
+                                        class="slds-input" 
+                                        value={settingsPhoneNumberId} 
+                                        onchange={handleSettingsPhoneNumberId}
+                                        placeholder="e.g. 586389771221151"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Modal Footer -->
+                    <footer class="slds-modal__footer">
+                        <button class="slds-button slds-button_neutral" onclick={handleCloseSettings}>Cancel</button>
+                        <button class="slds-button slds-button_brand" onclick={handleSaveSettings} disabled={settingsSaving}>
+                            <template if:true={settingsSaving}>Saving...</template>
+                            <template if:false={settingsSaving}>Save Configuration</template>
+                        </button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open"></div>
+        </template>
+    </lightning-card>
+</template>

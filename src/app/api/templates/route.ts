@@ -1,8 +1,10 @@
 // src/app/api/templates/route.ts
 // Fetches all APPROVED WhatsApp message templates from Meta
-// Used by Journey Builder activity UI dropdown
+// Used by Journey Builder activity UI dropdown & Salesforce LWC
 
 import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 
 interface MetaTemplate {
   name: string;
@@ -33,14 +35,36 @@ interface MetaTemplatesResponse {
 export async function GET() {
   try {
     // ----- Env Vars -----
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-    const wabaId = process.env.WABA_ID;
+    let accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    let wabaId = process.env.WABA_ID;
+
+    // Dynamically read .env.local to get live tokens without server restart
+    try {
+      const envPath = path.resolve(process.cwd(), '.env.local');
+      if (fs.existsSync(envPath)) {
+        const envContent = fs.readFileSync(envPath, 'utf8');
+        const lines = envContent.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+          const [key, ...rest] = trimmed.split('=');
+          let val = rest.join('=').trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (key === 'WHATSAPP_ACCESS_TOKEN' && val) accessToken = val;
+          if (key === 'WABA_ID' && val) wabaId = val;
+        }
+      }
+    } catch (e) {
+      console.warn('[templates] Could not read .env.local fallback:', e);
+    }
 
     if (!accessToken || !wabaId) {
       console.error('[templates] Missing WHATSAPP_ACCESS_TOKEN or WABA_ID');
       return NextResponse.json(
-        { error: 'Server configuration error: WhatsApp credentials not configured' },
-        { status: 500 }
+        { success: false, error: 'WhatsApp Access Token or WABA ID not configured. Please check .env.local or Settings.' },
+        { status: 400 }
       );
     }
 
@@ -59,10 +83,11 @@ export async function GET() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         console.error('[templates] Meta API error:', JSON.stringify(errorData));
+        const msg = errorData.error?.message || errorData.error?.error_user_msg || `Meta API Error ${response.status}`;
         return NextResponse.json(
-          { error: 'Failed to fetch templates from Meta', details: errorData },
+          { success: false, error: `Meta API Error: ${msg}`, details: errorData },
           { status: 502 }
         );
       }
@@ -99,10 +124,10 @@ export async function GET() {
       templates: cleanTemplates,
       count: cleanTemplates.length,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[templates] Internal error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
     );
   }

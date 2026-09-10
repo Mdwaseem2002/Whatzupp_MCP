@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
         if (sfmcRes.ok) {
           const sfmcData = await sfmcRes.json();
           if (sfmcData.items) {
-            console.log('[DEBUG] First SFMC row:', JSON.stringify(sfmcData.items[0]));
+            console.log('[DEBUG] First SFMC row (Audience):', JSON.stringify(sfmcData.items[0]));
             contacts = sfmcData.items.map((row: any, i: number) => {
               // Helper to do case-insensitive search across flat row, keys, and values
               const getValue = (keyName: string) => {
@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
                 id: name + '_' + i,
                 name: name,
                 phoneNumber: phone,
-                workspaceId: 'default-ws',
+                workspaceId: 'sfmc-ws-1',
                 tags: [],
                 company: '',
                 email: ''
@@ -87,9 +87,57 @@ export async function GET(request: NextRequest) {
             });
           }
         }
+
+        // Fetch Fast Replies from SFMC DE
+        const fastReplyUrl = `${baseUri}/data/v1/customobjectdata/key/WhatsApp_Fast_Replies/rowset?$pageSize=2500`;
+        const sfmcFastReplyRes = await fetch(fastReplyUrl, { headers: { 'Authorization': `Bearer ${access_token}` } });
+        if (sfmcFastReplyRes.ok) {
+          const sfmcFRData = await sfmcFastReplyRes.json();
+          if (sfmcFRData.items) {
+            console.log('[DEBUG] First SFMC row (FastReplies):', JSON.stringify(sfmcFRData.items[0]));
+            fastReplies = sfmcFRData.items.map((row: any, i: number) => {
+              const getValue = (keyName: string) => {
+                const lowerKey = keyName.toLowerCase();
+                const searchObj = (obj: any) => {
+                  if (!obj) return null;
+                  const key = Object.keys(obj).find(k => k.toLowerCase() === lowerKey);
+                  return key ? obj[key] : null;
+                };
+                return searchObj(row.keys) || searchObj(row.values) || searchObj(row) || '';
+              };
+
+              return {
+                id: getValue('Id') || `fr_${i}`,
+                userId: getValue('UserId') || SFMC_USER_ID,
+                title: getValue('Title') || 'Untitled',
+                body: getValue('Body') || '',
+                createdAt: getValue('CreatedAt') || new Date().toISOString(),
+              };
+            });
+          }
+        }
       } catch (sfmcError) {
         console.error('[User Sync] SFMC fallback failed:', sfmcError);
       }
+    }
+
+    if (workspaces.length === 0) {
+      workspaces = [
+        {
+          id: 'sfmc-ws-1',
+          name: 'Marketing Cloud Workspace',
+          type: 'sfmc',
+          status: 'connected',
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'salescloud-ws-1',
+          name: 'Sales Cloud Workspace',
+          type: 'salescloud',
+          status: 'connected',
+          createdAt: new Date().toISOString(),
+        },
+      ];
     }
 
     return NextResponse.json({

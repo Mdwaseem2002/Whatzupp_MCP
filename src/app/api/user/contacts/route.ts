@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import connectMongoDB from '@/lib/mongodb';
 import WorkspaceContact from '@/models/WorkspaceContact';
 
+export const dynamic = 'force-dynamic';
+
 // Default SFMC user ID — used when auth is bypassed
 const SFMC_USER_ID = 'sfmc-default-user';
 
@@ -32,6 +34,33 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
+    // Direct Salesforce Sales Cloud handler — bypass MongoDB completely
+    if (body.workspaceId === 'salescloud-ws-1' || body.workspaceId?.includes('salescloud')) {
+      const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
+      const connector = workspaceRegistry.getConnector('salescloud-ws-1') as any;
+      if (connector && typeof connector.createLead === 'function') {
+        const leadResult = await connector.createLead({
+          name: body.name,
+          phoneNumber: body.phoneNumber,
+          email: body.email,
+          company: body.company,
+        });
+        return NextResponse.json({
+          success: true,
+          data: {
+            id: leadResult.id,
+            name: leadResult.name,
+            phoneNumber: leadResult.phoneNumber,
+            workspaceId: body.workspaceId,
+            company: leadResult.company,
+            email: leadResult.email,
+            tags: [leadResult.salesforceObjectType || 'Lead'],
+            createdAt: leadResult.lastSyncedAt,
+          },
+        });
+      }
+    }
     
     try {
       await connectMongoDB();
@@ -81,7 +110,19 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const workspaceId = searchParams.get('workspaceId');
+    const objectType = (searchParams.get('objectType') as 'Lead' | 'Contact') || (id?.startsWith('003') ? 'Contact' : 'Lead');
     if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
+
+    // Direct Salesforce Sales Cloud handler — bypass MongoDB completely
+    if (id.startsWith('00Q') || id.startsWith('003') || workspaceId === 'salescloud-ws-1') {
+      const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
+      const connector = workspaceRegistry.getConnector('salescloud-ws-1') as any;
+      if (connector && typeof connector.deleteContactOrLead === 'function') {
+        await connector.deleteContactOrLead(id, objectType);
+      }
+      return NextResponse.json({ success: true });
+    }
 
     try {
       await connectMongoDB();
@@ -90,8 +131,6 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ success: true });
     } catch (dbError) {
       console.warn('[User Contacts] MongoDB disabled. Simulating DELETE for SFMC.');
-      // SFMC REST API does not easily support deletion of single rows via Data Events.
-      // We return success to allow the frontend UI to optimistically remove it.
       return NextResponse.json({ success: true });
     }
   } catch (error: any) {
@@ -104,6 +143,20 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, ...updates } = body;
     if (!id) return NextResponse.json({ error: 'Missing ID' }, { status: 400 });
+
+    // Direct Salesforce Sales Cloud handler — bypass MongoDB completely
+    if (body.workspaceId === 'salescloud-ws-1' || id.startsWith('00Q') || id.startsWith('003')) {
+      const objectType = body.salesforceObjectType || (id.startsWith('003') ? 'Contact' : 'Lead');
+      const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
+      const connector = workspaceRegistry.getConnector('salescloud-ws-1') as any;
+      if (connector && typeof connector.updateContactOrLead === 'function') {
+        await connector.updateContactOrLead(id, objectType, updates);
+      }
+      return NextResponse.json({
+        success: true,
+        data: { id, ...updates },
+      });
+    }
 
     try {
       await connectMongoDB();
@@ -139,3 +192,4 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 });
   }
 }
+

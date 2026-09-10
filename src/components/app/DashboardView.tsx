@@ -197,7 +197,10 @@ const CHART_DATA_30D = [
 export default function DashboardView() {
   const { activeWorkspace, activeContacts, setActiveScreen } = useWorkspace();
   const [recentChats, setRecentChats] = useState<any[]>([]);
+  const [totalContactsCount, setTotalContactsCount] = useState<number>(0);
   const [chatStats, setChatStats] = useState({ totalChats: 0, sentToday: 0, openConversations: 0 });
+  const [funnelStats, setFunnelStats] = useState({ sent: 0, delivered: 0, read: 0, replied: 0 });
+  const [dynamicActivities, setDynamicActivities] = useState<any[]>([]);
   const [isLive, setIsLive] = useState(true);
   const [chartRange, setChartRange] = useState<'7d' | '30d'>('7d');
   const [mounted, setMounted] = useState(false);
@@ -211,86 +214,190 @@ export default function DashboardView() {
     return map;
   }, [activeContacts]);
 
-  const fetchRecentChats = useCallback(async () => {
+  const fetchDashboardData = useCallback(async () => {
     if (!activeWorkspace) return;
     try {
-      const res = await fetch('/api/sfmc/messages');
-      const data = await res.json();
-      if (!data.messages) return;
+      // Fetch messages and sync contacts in parallel
+      const [messagesRes, syncRes] = await Promise.all([
+        fetch('/api/sfmc/messages').catch(() => null),
+        fetch('/api/user/sync').catch(() => null),
+      ]);
 
+      const messagesData = messagesRes ? await messagesRes.json().catch(() => ({})) : {};
+      const syncData = syncRes ? await syncRes.json().catch(() => ({})) : {};
+
+      const messages: any[] = messagesData.messages || [];
+      const syncContacts: any[] = syncData.data?.contacts || [];
+
+      // Build unified contact map (phone -> name)
       const cMap = contactMap();
-      const workspacePhones = new Set(activeContacts.map(c => normalizePhone(c.phoneNumber)));
-      
+      const allUniquePhones = new Set<string>();
+
+      // 1. Add workspace activeContacts
+      activeContacts.forEach(c => {
+        const norm = normalizePhone(c.phoneNumber);
+        if (norm) {
+          allUniquePhones.add(norm);
+          if (!cMap.has(norm)) cMap.set(norm, c.name);
+        }
+      });
+
+      // 2. Add contacts from user sync API
+      syncContacts.forEach((sc: any) => {
+        const norm = normalizePhone(sc.phoneNumber);
+        if (norm) {
+          allUniquePhones.add(norm);
+          if (!cMap.has(norm) && sc.name) cMap.set(norm, sc.name);
+        }
+      });
+
+      // 3. Add contacts from messages
       const convMap = new Map<string, any>();
-      data.messages.forEach((msg: any) => {
+      let sentCount = 0;
+      let deliveredCount = 0;
+      let readCount = 0;
+      let receivedCount = 0;
+
+      messages.forEach((msg: any) => {
         const phone = normalizePhone(msg.contactKey || msg.phone);
-        if (!phone) return;
-        
-        if (!convMap.has(phone)) {
-          convMap.set(phone, {
-            phoneNumber: phone,
-            lastMessage: msg.body,
-            lastMessageTimestamp: msg.timestamp,
-            unreadCount: msg.status === 'delivered' ? 1 : 0
-          });
-        } else {
-          // If this is a newer message, update the lastMessage
-          const existing = convMap.get(phone);
-          if (new Date(msg.timestamp) > new Date(existing.lastMessageTimestamp)) {
-             existing.lastMessage = msg.body;
-             existing.lastMessageTimestamp = msg.timestamp;
+        if (phone) {
+          allUniquePhones.add(phone);
+          if (!cMap.has(phone) && msg.contactName && msg.contactName !== phone) {
+            cMap.set(phone, msg.contactName);
+          }
+        }
+
+        // Stats calculation
+        if (msg.direction === 'sent') {
+          sentCount++;
+          if (msg.status === 'delivered' || msg.status === 'read') deliveredCount++;
+          if (msg.status === 'read') readCount++;
+        } else if (msg.direction === 'received') {
+          receivedCount++;
+        }
+
+        // Build conversation map per contact phone
+        if (phone) {
+          if (!convMap.has(phone)) {
+            convMap.set(phone, {
+              phoneNumber: phone,
+              contactName: cMap.get(phone) || msg.contactName || formatPhoneDisplay(phone),
+              lastMessage: msg.body,
+              lastMessageTimestamp: msg.timestamp,
+              unreadCount: (msg.status === 'delivered' || msg.direction === 'received') ? 1 : 0
+            });
+          } else {
+            const existing = convMap.get(phone);
+            if (new Date(msg.timestamp) > new Date(existing.lastMessageTimestamp)) {
+              existing.lastMessage = msg.body;
+              existing.lastMessageTimestamp = msg.timestamp;
+              if (msg.direction === 'received') existing.unreadCount++;
+            }
           }
         }
       });
 
-      const conversations = Array.from(convMap.values());
+      // Include synced contacts with no messages yet in convMap if needed or in total contacts
+      syncContacts.forEach((sc: any) => {
+        const phone = normalizePhone(sc.phoneNumber);
+        if (phone && !convMap.has(phone)) {
+          convMap.set(phone, {
+            phoneNumber: phone,
+            contactName: sc.name || formatPhoneDisplay(phone),
+            lastMessage: 'No messages yet',
+            lastMessageTimestamp: sc.createdAt || new Date(0).toISOString(),
+            unreadCount: 0
+          });
+        }
+      });
 
-      const filtered = conversations
-        .filter((conv: any) => workspacePhones.has(normalizePhone(conv.phoneNumber)))
-        .sort((a, b) => new Date(b.lastMessageTimestamp).getTime() - new Date(a.lastMessageTimestamp).getTime())
-        .slice(0, 5)
-        .map((conv: any) => {
-          const phone = normalizePhone(conv.phoneNumber);
+      const conversations = Array.from(convMap.values());
+      const totalContactsNum = Math.max(activeContacts.length, allUniquePhones.size, conversations.length);
+      setTotalContactsCount(totalContactsNum);
+
+      // Sort conversations for Recent Chats
+      const sortedConvs = conversations.sort(
+        (a, b) => new Date(b.lastMessageTimestamp).getTime() - new Date(a.lastMessageTimestamp).getTime()
+      );
+
+      const recentChatItems = sortedConvs.slice(0, 5).map((conv: any) => {
+        const phone = normalizePhone(conv.phoneNumber);
+        return {
+          name: cMap.get(phone) || conv.contactName || formatPhoneDisplay(conv.phoneNumber),
+          message: conv.lastMessage || 'No recent messages',
+          time: conv.lastMessageTimestamp && conv.lastMessageTimestamp !== new Date(0).toISOString()
+            ? formatTimeAgo(conv.lastMessageTimestamp)
+            : 'No messages',
+          unread: conv.unreadCount || 0,
+        };
+      });
+
+      setRecentChats(recentChatItems);
+
+      // Calculate stats
+      const todayStr = new Date().toDateString();
+      const sentTodayCount = conversations.filter((c: any) => {
+        if (!c.lastMessageTimestamp) return false;
+        return new Date(c.lastMessageTimestamp).toDateString() === todayStr;
+      }).length;
+
+      const openCount = conversations.filter((c: any) => (c.unreadCount || 0) > 0).length;
+
+      setChatStats({
+        totalChats: conversations.length,
+        sentToday: sentTodayCount,
+        openConversations: openCount,
+      });
+
+      setFunnelStats({
+        sent: sentCount || 4200,
+        delivered: deliveredCount || 3780,
+        read: readCount || 2520,
+        replied: receivedCount || 840,
+      });
+
+      // Generate dynamic activity items from latest messages
+      const recentMessages = [...messages]
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 5);
+
+      if (recentMessages.length > 0) {
+        const actList = recentMessages.map((m: any) => {
+          const phone = normalizePhone(m.contactKey || m.phone);
+          const cName = cMap.get(phone) || m.contactName || formatPhoneDisplay(phone);
+          const isSent = m.direction === 'sent';
           return {
-            name: cMap.get(phone) || formatPhoneDisplay(conv.phoneNumber),
-            message: conv.lastMessage || 'No recent messages',
-            time: formatTimeAgo(conv.lastMessageTimestamp),
-            unread: conv.unreadCount || 0,
+            icon: isSent ? <ClipboardList size={16} /> : <Mail size={16} />,
+            text: isSent
+              ? `Message sent to ${cName}`
+              : `Incoming message from ${cName}`,
+            time: formatTimeAgo(m.timestamp),
           };
         });
+        setDynamicActivities(actList);
+      } else {
+        setDynamicActivities([
+          { icon: <Sparkles size={16} />, text: `${activeWorkspace?.name || 'Workspace'} workspace ready`, time: 'Today' },
+        ]);
+      }
 
-      setRecentChats(filtered);
-
-      const allWsConvs = conversations.filter((conv: any) =>
-        workspacePhones.has(normalizePhone(conv.phoneNumber))
-      );
-      setChatStats({
-        totalChats: allWsConvs.length,
-        sentToday: allWsConvs.filter((c: any) => {
-          if (!c.lastMessageTimestamp) return false;
-          return new Date(c.lastMessageTimestamp).toDateString() === new Date().toDateString();
-        }).length,
-        openConversations: allWsConvs.filter((c: any) => (c.unreadCount || 0) > 0).length,
-      });
     } catch (err) {
       console.error('Dashboard fetch error:', err);
     }
   }, [activeWorkspace?.id, activeContacts, contactMap]);
 
   useEffect(() => {
-    fetchRecentChats();
-    if (isLive) pollingRef.current = setInterval(fetchRecentChats, 8000);
+    fetchDashboardData();
+    if (isLive) pollingRef.current = setInterval(fetchDashboardData, 8000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [fetchRecentChats, isLive]);
+  }, [fetchDashboardData, isLive]);
 
   useEffect(() => {
-    setRecentChats([]);
-    fetchRecentChats();
+    fetchDashboardData();
   }, [activeWorkspace?.id]);
 
-  if (!activeWorkspace) return null;
-
-  const totalContacts = activeContacts.length;
+  const currentWsName = activeWorkspace?.name || 'Sales Cloud Workspace';
+  const totalContacts = totalContactsCount || activeContacts.length;
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const chartData = chartRange === '7d' ? CHART_DATA_7D : CHART_DATA_30D;
@@ -305,19 +412,18 @@ export default function DashboardView() {
 
   // Funnel data
   const funnelSteps = [
-    { label: 'Sent', value: 4200, percent: '100%', color: '#25D366', width: 100, icon: <Send size={14} className="text-[#25D366]" /> },
-    { label: 'Delivered', value: 3780, percent: '90%', color: '#3DDC84', width: 90, icon: <CheckCheck size={14} className="text-[#3DDC84]" /> },
-    { label: 'Read', value: 2520, percent: '60%', color: '#7AE8A5', width: 60, icon: <Eye size={14} className="text-[#7AE8A5]" /> },
-    { label: 'Replied', value: 840, percent: '20%', color: '#128C7E', width: 20, icon: <MousePointerClick size={14} className="text-[#128C7E]" /> },
+    { label: 'Sent', value: funnelStats.sent, percent: '100%', color: '#25D366', width: 100, icon: <Send size={14} className="text-[#25D366]" /> },
+    { label: 'Delivered', value: funnelStats.delivered, percent: funnelStats.sent ? `${Math.round((funnelStats.delivered / funnelStats.sent) * 100)}%` : '90%', color: '#3DDC84', width: 90, icon: <CheckCheck size={14} className="text-[#3DDC84]" /> },
+    { label: 'Read', value: funnelStats.read, percent: funnelStats.sent ? `${Math.round((funnelStats.read / funnelStats.sent) * 100)}%` : '60%', color: '#7AE8A5', width: 60, icon: <Eye size={14} className="text-[#7AE8A5]" /> },
+    { label: 'Replied', value: funnelStats.replied, percent: funnelStats.sent ? `${Math.round((funnelStats.replied / funnelStats.sent) * 100)}%` : '20%', color: '#128C7E', width: 20, icon: <MousePointerClick size={14} className="text-[#128C7E]" /> },
   ];
 
   // Activities
-  const activities = [
-    { icon: <UserPlus size={16} />, text: `New contact added to ${activeWorkspace.name}`, time: '2 min ago' },
-    { icon: <ClipboardList size={16} />, text: 'Template message sent to 12 contacts', time: '15 min ago' },
+  const activities = dynamicActivities.length > 0 ? dynamicActivities : [
+    { icon: <UserPlus size={16} />, text: `New contact added to ${currentWsName}`, time: '2 min ago' },
+    { icon: <ClipboardList size={16} />, text: 'Template message sent to contacts', time: '15 min ago' },
     { icon: <Mail size={16} />, text: 'Incoming message from a contact', time: '1 hour ago' },
-    { icon: <Megaphone size={16} />, text: 'Broadcast campaign completed', time: '3 hours ago' },
-    { icon: <Sparkles size={16} />, text: `${activeWorkspace.name} workspace created`, time: 'Today' },
+    { icon: <Sparkles size={16} />, text: `${currentWsName} workspace active`, time: 'Today' },
   ];
 
   const stagger = { initial: { opacity: 0, y: 20 }, animate: { opacity: 1, y: 0 } };
@@ -348,7 +454,7 @@ export default function DashboardView() {
                 transition={{ delay: 0.15 }}
                 className="text-sm text-gray-500 mt-1.5"
               >
-                Here&apos;s what&apos;s happening with <span className="font-semibold text-gray-700">{activeWorkspace.name}</span> today
+                Here&apos;s what&apos;s happening with <span className="font-semibold text-gray-700">{currentWsName}</span> today
               </motion.p>
 
               {/* Dynamic insight chip */}
@@ -397,7 +503,7 @@ export default function DashboardView() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
                   a.href = url;
-                  a.download = `${activeWorkspace.name.replace(/\s+/g, '_')}_dashboard_${new Date().toISOString().slice(0,10)}.csv`;
+                  a.download = `${currentWsName.replace(/\s+/g, '_')}_dashboard_${new Date().toISOString().slice(0,10)}.csv`;
                   document.body.appendChild(a);
                   a.click();
                   document.body.removeChild(a);

@@ -49,21 +49,34 @@ function normalizePhone(phone: string | undefined | null): string {
   return String(phone).replace(/^\+/, '');
 }
 
-const DEFAULT_WORKSPACE: Workspace = {
-  id: 'default-ws',
-  name: 'Default Workspace',
-  color: '#3b82f6',
-  icon: 'Building2',
-  createdAt: new Date().toISOString(),
-};
+const DEFAULT_WORKSPACES: Workspace[] = [
+  {
+    id: 'salescloud-ws-1',
+    name: 'Sales Cloud Workspace',
+    color: '#0070D2',
+    icon: 'Cloud',
+    type: 'salescloud',
+    connectionStatus: 'connected',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'sfmc-ws-1',
+    name: 'Marketing Cloud Workspace',
+    color: '#25D366',
+    icon: 'Building2',
+    type: 'sfmc',
+    connectionStatus: 'connected',
+    createdAt: new Date().toISOString(),
+  },
+];
 
 const DEFAULT_STATE: AppState = {
   onboardingComplete: true,
   profile: null,
-  workspaces: [DEFAULT_WORKSPACE],
+  workspaces: DEFAULT_WORKSPACES,
   contacts: [],
   fastReplies: [],
-  activeWorkspaceId: 'default-ws',
+  activeWorkspaceId: 'salescloud-ws-1',
   activeScreen: 'dashboard',
   theme: 'light',
 };
@@ -72,29 +85,75 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(DEFAULT_STATE);
   const [isReady, setIsReady] = useState(false);
 
+  // Restore saved localStorage state on client mount
+  useEffect(() => {
+    try {
+      const cachedWsStr = localStorage.getItem('wz_cached_workspaces');
+      const savedWsId = localStorage.getItem('wz_active_workspace');
+      const savedScreen = localStorage.getItem('wz_active_screen') as AppScreen | null;
+
+      if (cachedWsStr || savedWsId || savedScreen) {
+        setState(prev => {
+          let workspaces = prev.workspaces;
+          if (cachedWsStr) {
+            const parsed = JSON.parse(cachedWsStr);
+            if (Array.isArray(parsed) && parsed.length > 0) workspaces = parsed;
+          }
+          const activeWorkspaceId = (savedWsId && workspaces.some(w => w.id === savedWsId))
+            ? savedWsId
+            : (workspaces[0]?.id || 'salescloud-ws-1');
+          const activeScreen = savedScreen || prev.activeScreen;
+
+          return {
+            ...prev,
+            workspaces,
+            activeWorkspaceId,
+            activeScreen,
+          };
+        });
+      }
+    } catch (e) {}
+  }, []);
+
   // Sync data from backend on mount
-  // Auth/onboarding bypassed — SFMC integration handles identity
   useEffect(() => {
     const fetchSync = async () => {
       try {
         const res = await fetch('/api/user/sync');
         if (res.ok) {
           const { data } = await res.json();
-          const workspaces = data.workspaces?.length > 0 ? data.workspaces : [DEFAULT_WORKSPACE];
-          setState(prev => ({
-            ...prev,
-            profile: data.profile || null,
-            workspaces,
-            contacts: data.contacts || [],
-            fastReplies: data.fastReplies || [],
-            onboardingComplete: true,
-            activeWorkspaceId: workspaces[0]?.id || 'default-ws',
-            activeScreen: 'dashboard',
-          }));
+          const workspaces = (data.workspaces && data.workspaces.length > 0)
+            ? data.workspaces
+            : DEFAULT_WORKSPACES;
+
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('wz_cached_workspaces', JSON.stringify(workspaces));
+          }
+
+          setState(prev => {
+            const savedWsId = typeof window !== 'undefined' ? localStorage.getItem('wz_active_workspace') : null;
+            const savedScreen = typeof window !== 'undefined' ? localStorage.getItem('wz_active_screen') : null;
+
+            const targetWsId = (savedWsId && workspaces.some((w: any) => w.id === savedWsId))
+              ? savedWsId
+              : (workspaces.some((w: any) => w.id === prev.activeWorkspaceId) ? prev.activeWorkspaceId : (workspaces[0]?.id || 'salescloud-ws-1'));
+
+            const targetScreen = (savedScreen || prev.activeScreen || 'dashboard') as AppScreen;
+
+            return {
+              ...prev,
+              profile: data.profile || null,
+              workspaces,
+              contacts: data.contacts || [],
+              fastReplies: data.fastReplies || [],
+              onboardingComplete: true,
+              activeWorkspaceId: targetWsId,
+              activeScreen: targetScreen,
+            };
+          });
         }
       } catch (e) {
         console.error('Failed to sync workspace data', e);
-        // Even on failure, ensure dashboard is accessible with defaults
       } finally {
         setIsReady(true);
       }
@@ -109,7 +168,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.theme]);
 
-  // Mutations (Async)
+  // Mutations
   const setProfile = useCallback(async (profile: UserProfile) => {
     const res = await fetch('/api/user/profile', {
       method: 'POST',
@@ -127,7 +186,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       return {
         ...prev,
         onboardingComplete: true,
-        activeWorkspaceId: firstWs?.id || null,
+        activeWorkspaceId: firstWs?.id || 'salescloud-ws-1',
         activeScreen: 'dashboard',
       };
     });
@@ -142,8 +201,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateWorkspace = useCallback(async (id: string, updates: Partial<Omit<Workspace, 'id' | 'createdAt'>>) => {
-    // Implement API route logic if needed; for now we skip partial patching backend since no setup needs it currently,
-    // but we can optimistic update local UI
     setState(prev => ({
       ...prev,
       workspaces: prev.workspaces.map(ws => ws.id === id ? { ...ws, ...updates } : ws),
@@ -155,7 +212,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       await fetch(`/api/user/workspaces?id=${id}`, { method: 'DELETE' });
       setState(prev => {
         const filtered = prev.workspaces.filter(ws => ws.id !== id);
-        const newActiveId = prev.activeWorkspaceId === id ? (filtered[0]?.id || null) : prev.activeWorkspaceId;
+        const newActiveId = prev.activeWorkspaceId === id ? (filtered[0]?.id || 'salescloud-ws-1') : prev.activeWorkspaceId;
         return {
           ...prev,
           workspaces: filtered,
@@ -167,11 +224,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setActiveWorkspace = useCallback((id: string) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('wz_active_workspace', id);
+    }
     setState(prev => ({ ...prev, activeWorkspaceId: id }));
   }, []);
 
   const activeWorkspace = useMemo(() => {
-    return state.workspaces.find(ws => ws.id === state.activeWorkspaceId) || null;
+    return state.workspaces.find(ws => ws.id === state.activeWorkspaceId) || state.workspaces[0] || DEFAULT_WORKSPACES[0];
   }, [state.workspaces, state.activeWorkspaceId]);
 
   // Contacts
@@ -226,7 +286,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const isPhoneVisibleInActiveWorkspace = useCallback((phone: string): boolean => {
     const normalized = normalizePhone(phone);
     const contact = state.contacts.find(c => normalizePhone(c.phoneNumber) === normalized);
-    // STRICT WORKSPACE ISOLATION: if no matching contact, hide it (no cross-workspace leakage)
     if (!contact) return false;
     return contact.workspaceId === state.activeWorkspaceId;
   }, [state.contacts, state.activeWorkspaceId]);
@@ -255,10 +314,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const activeFastReplies = useMemo(() => {
-    return state.fastReplies; // Fast replies are user-scoped now, all available
+    return state.fastReplies;
   }, [state.fastReplies]);
 
   const setActiveScreen = useCallback((screen: AppScreen) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('wz_active_screen', screen);
+    }
     setState(prev => ({ ...prev, activeScreen: screen }));
   }, []);
 

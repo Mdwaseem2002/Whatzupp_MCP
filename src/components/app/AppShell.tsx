@@ -18,7 +18,43 @@ import AnalyticsView from '@/components/app/AnalyticsView';
 import SettingsView from '@/components/app/SettingsView';
 import FastReplyView from '@/components/app/FastReplyView';
 import SFMCView from '@/components/app/SFMCView';
+import SalesCloudView from '@/components/app/SalesCloudView';
 import type { AppScreen } from '@/types/workspace';
+
+class ViewErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: string }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: '' };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error: error?.message || 'Rendering error' };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error('AppShell View Error:', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#F8FAFC]">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 max-w-md text-center">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
+              ⚠️
+            </div>
+            <h3 className="text-lg font-bold text-gray-900 mb-1">View Loading Notice</h3>
+            <p className="text-xs text-gray-500 mb-4">{this.state.error}</p>
+            <button
+              onClick={() => { this.setState({ hasError: false }); window.location.reload(); }}
+              className="px-4 py-2 bg-[#25D366] text-white font-bold rounded-xl text-xs shadow-sm hover:bg-[#128C7E] transition-all"
+            >
+              Refresh Workspace View
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const NAV_ITEMS: { key: AppScreen; label: string; icon: React.ReactNode }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
@@ -29,6 +65,7 @@ const NAV_ITEMS: { key: AppScreen; label: string; icon: React.ReactNode }[] = [
   { key: 'automation', label: 'Automation', icon: <Workflow size={20} /> },
   { key: 'analytics', label: 'Analytics', icon: <BarChart3 size={20} /> },
   { key: 'sfmc', label: 'SFMC', icon: <Cloud size={20} /> },
+  { key: 'salescloud', label: 'Sales Cloud', icon: <Cloud size={20} /> },
   { key: 'fast-reply', label: 'Fast Reply', icon: <Zap size={20} /> },
   { key: 'settings', label: 'Settings', icon: <Settings size={20} /> },
 ];
@@ -46,10 +83,10 @@ export default function AppShell() {
   }, []);
 
   // Derive display name from active workspace
-  const displayName = activeWorkspace?.name || 'SFMC User';
+  const displayName = activeWorkspace?.name || 'Sales Cloud Workspace';
   const initials = displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 
-  const activeScreen = state.activeScreen;
+  const activeScreen = state.activeScreen || 'dashboard';
 
   const renderContent = () => {
     switch (activeScreen) {
@@ -62,6 +99,7 @@ export default function AppShell() {
       case 'analytics': return <AnalyticsView />;
       case 'settings': return <SettingsView />;
       case 'sfmc': return <SFMCView />;
+      case 'salescloud': return <SalesCloudView />;
       case 'fast-reply': return <FastReplyView />;
       default: return <DashboardView />;
     }
@@ -144,7 +182,9 @@ export default function AppShell() {
 
         {/* Content Area */}
         <main className="flex-1 overflow-hidden flex">
-          {renderContent()}
+          <ViewErrorBoundary>
+            {renderContent()}
+          </ViewErrorBoundary>
         </main>
       </div>
 
