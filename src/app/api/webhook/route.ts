@@ -6,12 +6,9 @@
 import { NextResponse } from 'next/server';
 import { writeReceivedMessage, updateSentMessageStatus, writeOptOutStatus } from '@/lib/sfmcDE';
 import { SalesCloudConnector } from '@/lib/connectors/salesCloudConnector';
-import { SFMCConnector } from '@/lib/connectors/sfmcConnector';
 import { pushUnmatched } from '@/lib/storage/kvStore';
-import { MessageStatus } from '@/types';
 
 const salesCloudConnector = new SalesCloudConnector();
-const sfmcConnector = new SFMCConnector();
 
 // ----- Idempotency: Track processed wamids in-memory -----
 const processedWamids = new Set<string>();
@@ -152,6 +149,12 @@ export async function POST(request: Request) {
                   ? new Date(Number(message.timestamp) * 1000).toISOString()
                   : new Date().toISOString();
 
+                // ─── STRICT WORKSPACE ISOLATION ───
+                // Each workspace is isolated — messages go to ONE platform only.
+                // Sales Cloud client → WhatsApp_Message__c ONLY
+                // SFMC client → SFMC DE ONLY
+                // Never cross-write between workspaces.
+
                 // ----- Step 1: Check Sales Cloud Workspace Match -----
                 let hasSalesCloudMatch = false;
                 let scContact: any = null;
@@ -164,38 +167,9 @@ export async function POST(request: Request) {
                   console.warn('[webhook] Sales Cloud resolveContact check failed:', e);
                 }
 
-                // ----- Step 2: Check SFMC Workspace Match -----
-                // Always write to SFMC DE when SFMC is configured, regardless of contact match.
-                // This prevents data loss — inbound messages should always be recorded.
-                let hasSfmcMatch = false;
-                const sfmcConfigured = !!(process.env.SFMC_REST_BASE_URI && process.env.SFMC_CLIENT_ID);
-                
-                if (sfmcConfigured) {
-                  try {
-                    const sfmcContacts = await sfmcConnector.fetchContacts({ search: normalizedPhone, limit: 5 });
-                    if (sfmcContacts && sfmcContacts.length > 0) {
-                      // Use last-10-digit matching (consistent with rest of codebase)
-                      const last10 = normalizedPhone.replace(/[^0-9]/g, '').slice(-10);
-                      hasSfmcMatch = sfmcContacts.some(c => {
-                        const cPhone = (c.phoneNumber || '').replace(/[^0-9]/g, '');
-                        return cPhone.length >= 10 && (cPhone.endsWith(last10) || last10.endsWith(cPhone.slice(-10)));
-                      });
-                    }
-                  } catch (e) {
-                    console.warn('[webhook] SFMC resolveContact check failed:', e);
-                  }
-
-                  // Even if no matching contact, still write to SFMC DE when SFMC is configured
-                  // This ensures we never lose inbound messages
-                  if (!hasSfmcMatch) {
-                    console.log(`[webhook] No exact SFMC contact match for ${normalizedPhone}, but SFMC is configured. Writing to DE anyway.`);
-                    hasSfmcMatch = true;
-                  }
-                }
-
-                // ----- Step 3: Conditional Fan-Out Write -----
                 if (hasSalesCloudMatch) {
-                  console.log(`[webhook] Matching contact found in Sales Cloud for ${normalizedPhone}. Saving to WhatsApp_Message__c.`);
+                  // ─── SALES CLOUD ONLY ───
+                  console.log(`[webhook] Sales Cloud match for ${normalizedPhone}. Writing to WhatsApp_Message__c ONLY.`);
                   await salesCloudConnector.saveInboundMessage({
                     messageId,
                     senderPhone: normalizedPhone,
@@ -204,33 +178,35 @@ export async function POST(request: Request) {
                     leadId: scContact?.salesforceObjectType === 'Lead' ? scContact.salesforceRecordId : undefined,
                     contactId: scContact?.salesforceObjectType === 'Contact' ? scContact.salesforceRecordId : undefined,
                   });
-                }
+                } else {
+                  // ----- Step 2: No Sales Cloud match — Check SFMC -----
+                  const sfmcConfigured = !!(process.env.SFMC_REST_BASE_URI && process.env.SFMC_CLIENT_ID);
 
-                if (hasSfmcMatch) {
-                  console.log(`[webhook] Writing inbound message to WhatsApp_Received_Messages DE for ${normalizedPhone}.`);
-                  await writeReceivedMessage({
-                    WaMid: messageId,
-                    Phone: normalizedPhone,
-                    ContactName: scContact?.name || '',
-                    MessageType: message.type as string || 'text',
-                    MessageContent: contentText || '',
-                    ReceivedTime: msgIsoTimestamp,
-                  });
-                }
-
-                // ----- Step 4: No Match in Either Workspace -> Unmatched Queue -----
-                if (!hasSalesCloudMatch && !hasSfmcMatch) {
-                  console.log(`[webhook] Phone ${normalizedPhone} matched neither workspace. Pushing to Unmatched Queue.`);
-                  await pushUnmatched({
-                    id: messageId,
-                    phoneNumber: normalizedPhone,
-                    content: contentText,
-                    timestamp: msgIsoTimestamp,
-                    mediaType,
-                    mediaId,
-                    filename,
-                    rawPayload: message as Record<string, unknown>
-                  });
+                  if (sfmcConfigured) {
+                    // ─── SFMC ONLY ───
+                    console.log(`[webhook] No Sales Cloud match. Writing to SFMC WhatsApp_Received_Messages DE for ${normalizedPhone}.`);
+                    await writeReceivedMessage({
+                      WaMid: messageId,
+                      Phone: normalizedPhone,
+                      ContactName: '',
+                      MessageType: message.type as string || 'text',
+                      MessageContent: contentText || '',
+                      ReceivedTime: msgIsoTimestamp,
+                    });
+                  } else {
+                    // ----- Step 3: Neither workspace configured — Unmatched Queue -----
+                    console.log(`[webhook] Phone ${normalizedPhone} matched neither workspace. Pushing to Unmatched Queue.`);
+                    await pushUnmatched({
+                      id: messageId,
+                      phoneNumber: normalizedPhone,
+                      content: contentText,
+                      timestamp: msgIsoTimestamp,
+                      mediaType,
+                      mediaId,
+                      filename,
+                      rawPayload: message as Record<string, unknown>
+                    });
+                  }
                 }
 
                 // ---- Opt-Out Processing (STOP keywords) ----
@@ -273,15 +249,50 @@ export async function POST(request: Request) {
                 ? new Date(Number(timestamp) * 1000).toISOString()
                 : new Date().toISOString();
 
-              await updateSentMessageStatus({
-                WaMid: wamid,
-                Status: statusValue,
-                DeliveredTime: statusValue === 'delivered' ? isoTimestamp : undefined,
-                ReadTime: statusValue === 'read' ? isoTimestamp : undefined,
-                FailedReason: statusValue === 'failed' ? JSON.stringify(status.errors || {}) : undefined,
-              });
-            } catch (sfmcError) {
-              console.error(`[webhook] SFMC status update failed for ${wamid}:`, sfmcError);
+              // ─── STRICT WORKSPACE ISOLATION for status updates ───
+              // Try Sales Cloud first (update WhatsApp_Message__c if the wamid exists there)
+              let statusWritten = false;
+              try {
+                const { access_token: scToken, instance_url } = await (await import('@/lib/salesCloudAuth')).getSalesCloudAccessToken();
+                if (scToken && !scToken.startsWith('mock-')) {
+                  // Query to check if this wamid exists in WhatsApp_Message__c
+                  const checkSoql = `SELECT Id FROM WhatsApp_Message__c WHERE Message_Id__c = '${wamid.replace(/'/g, "\\\\'")}' LIMIT 1`;
+                  const checkRes = await fetch(`${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(checkSoql)}`, {
+                    headers: { Authorization: `Bearer ${scToken}` },
+                  });
+                  if (checkRes.ok) {
+                    const checkData = await checkRes.json();
+                    if (checkData.records && checkData.records.length > 0) {
+                      // Update status in Sales Cloud
+                      const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
+                      await fetch(upsertUrl, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${scToken}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          Status__c: statusValue.toUpperCase(),
+                        }),
+                      });
+                      statusWritten = true;
+                      console.log(`[webhook] Status ${statusValue} updated in Sales Cloud for ${wamid}`);
+                    }
+                  }
+                }
+              } catch (scErr) {
+                console.warn('[webhook] Sales Cloud status check failed:', scErr);
+              }
+
+              // If not found in Sales Cloud, update SFMC DE
+              if (!statusWritten) {
+                await updateSentMessageStatus({
+                  WaMid: wamid,
+                  Status: statusValue,
+                  DeliveredTime: statusValue === 'delivered' ? isoTimestamp : undefined,
+                  ReadTime: statusValue === 'read' ? isoTimestamp : undefined,
+                  FailedReason: statusValue === 'failed' ? JSON.stringify(status.errors || {}) : undefined,
+                });
+              }
+            } catch (statusError) {
+              console.error(`[webhook] Status update failed for ${wamid}:`, statusError);
             }
           }
         }

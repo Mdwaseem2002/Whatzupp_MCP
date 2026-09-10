@@ -349,6 +349,7 @@ export default function ChatsView() {
           accessToken: config.accessToken,
           phoneNumberId: config.phoneNumberId,
           localId: newMessage.id,
+          workspaceId: activeWorkspace?.id || 'sfmc-ws-1',
           mediaId: options?.mediaId,
           mediaType: options?.mediaType,
           mimeType: options?.mimeType,

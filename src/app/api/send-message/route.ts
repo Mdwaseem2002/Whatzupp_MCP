@@ -99,22 +99,12 @@ export async function POST(request: Request) {
         mediaUrl: mediaId ? `/api/media?mediaId=${mediaId}` : undefined,
       };
 
-      // Write to SFMC Data Extension
-      try {
-        await writeSentMessage({
-          WaMid: wamid,
-          Phone: formattedPhone,
-          MessageContent: formattedMediaContent,
-          Status: 'sent',
-          SentTime: new Date().toISOString(),
-          Source: 'manual_send',
-        });
-      } catch (sfmcError) {
-        console.error('[send-message] SFMC DE write failed:', sfmcError);
-      }
-
-      // Write to Salesforce Sales Cloud WhatsApp_Message__c object if workspace specified
+      // ─── STRICT WORKSPACE ISOLATION ───
+      // Sales Cloud workspace → store in Salesforce WhatsApp_Message__c ONLY
+      // SFMC workspace (or default) → store in SFMC WhatsApp_Sent_Messages DE ONLY
+      // Never cross-write between workspaces.
       if (targetWorkspaceId === 'salescloud-ws-1') {
+        // Sales Cloud ONLY
         try {
           const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
           const scConnector = new SalesCloudConnector();
@@ -122,8 +112,24 @@ export async function POST(request: Request) {
             recipientPhone: formattedPhone,
             content: formattedMediaContent,
           });
+          console.log('[send-message] Wrote sent message to Sales Cloud WhatsApp_Message__c');
         } catch (scErr) {
-          console.warn('[send-message] Sales Cloud write failed:', scErr);
+          console.error('[send-message] Sales Cloud write failed:', scErr);
+        }
+      } else {
+        // SFMC ONLY (default for SFMC workspace or no workspace specified)
+        try {
+          await writeSentMessage({
+            WaMid: wamid,
+            Phone: formattedPhone,
+            MessageContent: formattedMediaContent,
+            Status: 'sent',
+            SentTime: new Date().toISOString(),
+            Source: 'manual_send',
+          });
+          console.log('[send-message] Wrote sent message to SFMC WhatsApp_Sent_Messages DE');
+        } catch (sfmcError) {
+          console.error('[send-message] SFMC DE write failed:', sfmcError);
         }
       }
 
