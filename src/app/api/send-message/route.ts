@@ -12,11 +12,51 @@ export async function POST(request: Request) {
       const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
       const connector = workspaceRegistry.getConnector(targetWorkspaceId);
       if (connector) {
+        const formattedPhone = to.replace('+', '');
         const result = await connector.sendMessage({
-          recipientPhone: to.replace('+', ''),
+          recipientPhone: formattedPhone,
           content: message || '',
         });
-        return NextResponse.json({ success: true, data: result, workspaceId: targetWorkspaceId });
+
+        // Broadcast SSE for real-time UI updates
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+        const sentMessageData = {
+          id: result.messageId,
+          localId,
+          content: message || '',
+          timestamp: new Date().toISOString(),
+          sender: 'user',
+          status: 'sent',
+          recipientId: formattedPhone,
+          contactPhoneNumber: formattedPhone,
+        };
+
+        // Per-phone SSE stream
+        fetch(`${appUrl}/api/messages/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-secret': process.env.JWT_SECRET || 'fallback-secret',
+          },
+          body: JSON.stringify({ phoneNumber: formattedPhone, message: sentMessageData }),
+        }).catch(err => console.error('[send-message] SSE per-phone emit failed:', err));
+
+        // Global SSE stream
+        fetch(`${appUrl}/api/messages/stream/global`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-internal-secret': process.env.JWT_SECRET || 'fallback-secret',
+          },
+          body: JSON.stringify({ phoneNumber: formattedPhone, message: sentMessageData }),
+        }).catch(err => console.error('[send-message] SSE global emit failed:', err));
+
+        // Return in the format the frontend expects (data.messages[0].id for wamid extraction)
+        return NextResponse.json({
+          success: true,
+          data: { messages: [{ id: result.messageId }] },
+          workspaceId: targetWorkspaceId,
+        });
       }
     }
 
