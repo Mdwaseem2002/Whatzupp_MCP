@@ -167,7 +167,8 @@ export class SalesCloudConnector implements Connector {
       }
       if (params.phoneNumber) {
         const safePhone = params.phoneNumber.replace(/'/g, "\\'");
-        conditions.push(`Phone__c = '${safePhone}'`);
+        const last10 = safePhone.length >= 10 ? safePhone.slice(-10) : safePhone;
+        conditions.push(`(Phone__c = '${safePhone}' OR Phone__c LIKE '%${last10}')`);
       }
       if (params.cursor) {
         const safeCursor = params.cursor.replace(/'/g, "\\'");
@@ -183,11 +184,23 @@ export class SalesCloudConnector implements Connector {
       });
 
       if (!res.ok) {
-        throw new Error(`SOQL query for WhatsApp_Message__c failed (${res.status})`);
+        const errText = await res.text().catch(() => '');
+        console.error(`[SalesCloudConnector] SOQL query error (${res.status}): ${errText}`);
+        throw new Error(`SOQL query for WhatsApp_Message__c failed (${res.status}): ${errText}`);
       }
 
       const data = await res.json();
       const records = data.records || [];
+
+      if (records.length === 0) {
+        let msgs = [...this.fallbackMessages];
+        if (params.phoneNumber) {
+          msgs = msgs.filter(m => m.senderId === params.phoneNumber || m.recipientId === params.phoneNumber);
+        }
+        if (msgs.length > 0) {
+          return { messages: msgs };
+        }
+      }
 
       const messages: WorkspaceMessage[] = records.map((r: any) => ({
         id: r.Message_Id__c || r.Id,
