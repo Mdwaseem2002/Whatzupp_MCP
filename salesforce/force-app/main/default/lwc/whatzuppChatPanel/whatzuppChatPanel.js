@@ -11,7 +11,7 @@ import CONTACT_NAME from '@salesforce/schema/Contact.Name';
 import ACCOUNT_PHONE from '@salesforce/schema/Account.Phone';
 import ACCOUNT_NAME from '@salesforce/schema/Account.Name';
 
-const DEFAULT_HTTPS_APP_URL = 'https://whatzupp-mcp.vercel.app';
+const DEFAULT_HTTPS_APP_URL = 'https://odd-news-invite.loca.lt';
 
 // ─── Emoji Data — categorised common emojis ───
 const EMOJI_CATEGORIES = [
