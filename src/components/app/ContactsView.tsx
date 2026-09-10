@@ -187,7 +187,21 @@ export default function ContactsView() {
                 </button>
                 <button 
                   onClick={async () => {
-                    if (confirm('Delete this contact?')) {
+                    if (confirm(`Delete ${contact.name}?`)) {
+                      const isSalesCloud = activeWorkspace.type === 'salescloud' || activeWorkspace.platform === 'sales_cloud' || activeWorkspace.id === 'salescloud-ws-1';
+                      const wsKey = isSalesCloud
+                        ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+                        : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
+
+                      try {
+                        const targetId = contact.name || contact.id;
+                        await fetch(`/api/workspaces/${activeWorkspace.id}/contacts?id=${encodeURIComponent(targetId)}`, {
+                          method: 'DELETE',
+                          headers: { 'X-Workspace-Key': wsKey }
+                        });
+                      } catch (e) {
+                        console.error('Delete workspace contact error:', e);
+                      }
                       await deleteContact(contact.id);
                       setRefreshKey(prev => prev + 1);
                     }
@@ -209,10 +223,30 @@ export default function ContactsView() {
           workspace={activeWorkspace}
           existingContact={editingContact}
           onSave={async (data) => {
-            if (editingContact) {
-              await updateContact(editingContact.id, data);
-            } else {
-              await addContact({ ...data, workspaceId: activeWorkspace.id });
+            const isSalesCloud = activeWorkspace.type === 'salescloud' || activeWorkspace.platform === 'sales_cloud' || activeWorkspace.id === 'salescloud-ws-1';
+            const wsKey = isSalesCloud
+              ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+              : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
+
+            try {
+              if (editingContact) {
+                const targetId = editingContact.name || editingContact.id;
+                await fetch(`/api/workspaces/${activeWorkspace.id}/contacts`, {
+                  method: 'PATCH',
+                  headers: { 'X-Workspace-Key': wsKey, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: targetId, ...data })
+                });
+                await updateContact(editingContact.id, data);
+              } else {
+                await fetch(`/api/workspaces/${activeWorkspace.id}/contacts`, {
+                  method: 'POST',
+                  headers: { 'X-Workspace-Key': wsKey, 'Content-Type': 'application/json' },
+                  body: JSON.stringify(data)
+                });
+                await addContact({ ...data, workspaceId: activeWorkspace.id });
+              }
+            } catch (e) {
+              console.error('Save workspace contact error:', e);
             }
             setShowAddModal(false);
             setEditingContact(null);

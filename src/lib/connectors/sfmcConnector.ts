@@ -228,6 +228,134 @@ export class SFMCConnector implements Connector {
     };
   }
 
+  async createContact(params: {
+    name: string;
+    phoneNumber: string;
+    email?: string;
+    company?: string;
+  }): Promise<WorkspaceContactResult> {
+    const cleanPhone = params.phoneNumber.replace(/[^0-9]/g, '');
+    const contactKey = params.name.trim() || cleanPhone;
+
+    const sfmcRestBaseUri = process.env.SFMC_REST_BASE_URI;
+    if (sfmcRestBaseUri) {
+      try {
+        const { access_token } = await getSfmcAccessToken();
+        const baseUri = sfmcRestBaseUri.replace(/\/$/, '');
+        const url = `${baseUri}/hub/v1/dataevents/key:WhatsApp_Test_Audience/rowset`;
+
+        await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${access_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify([
+            {
+              keys: { contactkey: contactKey },
+              values: { mobilephone: cleanPhone }
+            }
+          ])
+        });
+      } catch (err) {
+        console.error('[SFMCConnector] createContact error:', err);
+      }
+    }
+
+    return {
+      id: `sfmc-${cleanPhone}`,
+      name: contactKey,
+      phoneNumber: cleanPhone,
+      email: params.email || `${cleanPhone}@sfmc-contacts.com`,
+      company: 'SFMC Subscriber',
+      lastSyncedAt: new Date().toISOString(),
+    };
+  }
+
+  async updateContact(
+    id: string,
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+  ): Promise<boolean> {
+    const key = id.replace(/^sfmc-/, '');
+    const name = updates.name || key;
+    const phone = (updates.phoneNumber || key).replace(/[^0-9]/g, '');
+
+    const sfmcRestBaseUri = process.env.SFMC_REST_BASE_URI;
+    if (sfmcRestBaseUri) {
+      try {
+        const { access_token } = await getSfmcAccessToken();
+        const baseUri = sfmcRestBaseUri.replace(/\/$/, '');
+        const url = `${baseUri}/hub/v1/dataevents/key:WhatsApp_Test_Audience/rowset`;
+
+        await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${access_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify([
+            {
+              keys: { contactkey: name },
+              values: { mobilephone: phone }
+            }
+          ])
+        });
+      } catch (err) {
+        console.error('[SFMCConnector] updateContact error:', err);
+      }
+    }
+    return true;
+  }
+
+  async deleteContact(id: string): Promise<boolean> {
+    let key = id.replace(/^sfmc-/, '');
+    const sfmcAuthBaseUri = process.env.SFMC_AUTH_BASE_URI;
+
+    if (sfmcAuthBaseUri) {
+      try {
+        const { access_token } = await getSfmcAccessToken();
+        const soapUrl = `${sfmcAuthBaseUri.replace(/\/$/, '').replace('.auth.', '.soap.')}/Service.asmx`;
+
+        // If id was a numeric phone, try deleting both key=id and contactkey in DE
+        const soapBody = `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Header>
+    <fueloauth>${access_token}</fueloauth>
+  </s:Header>
+  <s:Body>
+    <DeleteRequest xmlns="http://exacttarget.com/wsdl/partnerAPI">
+      <Objects xsi:type="DataExtensionObject" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <CustomerKey>WhatsApp_Test_Audience</CustomerKey>
+        <Keys>
+          <Key>
+            <Name>contactkey</Name>
+            <Value>${key}</Value>
+          </Key>
+        </Keys>
+      </Objects>
+    </DeleteRequest>
+  </s:Body>
+</s:Envelope>`;
+
+        const res = await fetch(soapUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/xml; charset=utf-8',
+            'SOAPAction': 'Delete'
+          },
+          body: soapBody
+        });
+
+        if (!res.ok) {
+          console.warn('[SFMCConnector] deleteContact SOAP request failed:', res.status);
+        }
+      } catch (err) {
+        console.error('[SFMCConnector] deleteContact error:', err);
+      }
+    }
+    return true;
+  }
+
   fieldSchema(): FieldMappingSchema[] {
     return [
       { name: 'WaMid', label: 'WhatsApp Message ID', type: 'Text', required: true },

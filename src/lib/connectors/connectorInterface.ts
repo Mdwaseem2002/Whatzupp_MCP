@@ -59,6 +59,20 @@ export interface Connector {
     email?: string;
   }): Promise<WorkspaceContactResult>;
 
+  createContact(params: {
+    name: string;
+    phoneNumber: string;
+    email?: string;
+    company?: string;
+  }): Promise<WorkspaceContactResult>;
+
+  updateContact(
+    id: string,
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+  ): Promise<boolean>;
+
+  deleteContact(id: string): Promise<boolean>;
+
   fieldSchema(): FieldMappingSchema[];
   validateMapping(): Promise<boolean>;
 }

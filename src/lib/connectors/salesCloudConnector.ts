@@ -667,6 +667,28 @@ export class SalesCloudConnector implements Connector {
     return true;
   }
 
+  async createContact(params: {
+    name: string;
+    phoneNumber: string;
+    email?: string;
+    company?: string;
+  }): Promise<WorkspaceContactResult> {
+    return this.createLead(params);
+  }
+
+  async updateContact(
+    id: string,
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+  ): Promise<boolean> {
+    const objectType = id.startsWith('003') ? 'Contact' : 'Lead';
+    return this.updateContactOrLead(id, objectType, updates);
+  }
+
+  async deleteContact(id: string): Promise<boolean> {
+    const objectType = id.startsWith('003') ? 'Contact' : 'Lead';
+    return this.deleteContactOrLead(id, objectType);
+  }
+
 
   fieldSchema(): FieldMappingSchema[] {
     return [
