@@ -140,88 +140,76 @@ export default function ChatsView() {
   useEffect(() => {
     const wsId = activeWorkspace?.id || 'sfmc-ws-1';
     const isSalesCloud = activeWorkspace?.type === 'salescloud' || activeWorkspace?.platform === 'sales_cloud' || wsId === 'salescloud-ws-1';
+    const wsKey = isSalesCloud
+      ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+      : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
 
     // Reset contacts and messages whenever active workspace changes
     setAllBackendContacts([]);
     setMessages({});
 
-    if (isSalesCloud) {
-      // Fetch Sales Cloud contacts & messages from Sales Cloud connector / API endpoint
-      fetch(`/api/workspaces/${wsId}/contacts`, {
-        headers: { 'X-Workspace-Key': process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret' }
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.contacts && Array.isArray(data.contacts)) {
-            const scContacts: Contact[] = data.contacts.map((c: any) => ({
-              id: c.id || c.sourceRecordId || c.phoneNumber,
-              name: c.name || c.phoneNumber,
-              phoneNumber: normalizePhone(c.phoneNumber),
-              online: undefined,
-            }));
-            setAllBackendContacts(scContacts);
-          } else {
-            setAllBackendContacts([]);
-          }
-        })
-        .catch(err => {
-          console.log('No Sales Cloud contacts loaded for workspace:', wsId);
-          setAllBackendContacts([]);
-        });
-    } else {
-      // Hydrate conversations exclusively from SFMC Data Extensions
-      fetch('/api/sfmc/messages')
-        .then(res => res.json())
-        .then(data => {
-          if (data.messages && Array.isArray(data.messages)) {
-            const initialMessages: Record<string, Message[]> = {};
-            const backendContacts: Contact[] = [];
-            const seenPhones = new Set<string>();
+    fetch(`/api/workspaces/${wsId}/contacts`, {
+      headers: { 'X-Workspace-Key': wsKey }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.contacts && Array.isArray(data.contacts)) {
+          const wsContacts: Contact[] = data.contacts.map((c: any) => ({
+            id: c.id || c.sourceRecordId || c.phoneNumber,
+            name: c.name || c.phoneNumber,
+            phoneNumber: normalizePhone(c.phoneNumber),
+            online: undefined,
+          }));
+          setAllBackendContacts(wsContacts);
 
-            const sortedMessages = [...data.messages].sort(
-              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
+          if (!isSalesCloud) {
+            // Hydrate messages for SFMC workspace contacts from SFMC DEs
+            fetch('/api/sfmc/messages')
+              .then(r => r.json())
+              .then(msgData => {
+                if (msgData.messages && Array.isArray(msgData.messages)) {
+                  const initialMessages: Record<string, Message[]> = {};
+                  const sfmcPhones = new Set(wsContacts.map(c => c.phoneNumber));
 
-            sortedMessages.forEach((msg: any) => {
-              const normPhone = normalizePhone(msg.contactKey || msg.phone);
-              if (!normPhone) return;
+                  msgData.messages.forEach((msg: any) => {
+                    const normPhone = normalizePhone(msg.phone || msg.contactKey);
+                    if (!normPhone || !sfmcPhones.has(normPhone)) return;
 
-              if (!seenPhones.has(normPhone)) {
-                seenPhones.add(normPhone);
-                backendContacts.push({
-                  id: normPhone,
-                  name: msg.contactName || normPhone,
-                  phoneNumber: normPhone,
-                  online: undefined
-                });
+                    if (!initialMessages[normPhone]) {
+                      initialMessages[normPhone] = [];
+                    }
+                    initialMessages[normPhone].push({
+                      id: 'sfmc-' + (msg.wamid || msg.id),
+                      content: msg.body,
+                      timestamp: msg.timestamp,
+                      sender: msg.direction === 'sent' ? 'user' : 'contact',
+                      status: msg.status === 'read' ? MessageStatus.READ : msg.status === 'delivered' ? MessageStatus.DELIVERED : MessageStatus.SENT,
+                      recipientId: normPhone,
+                      attachments: false
+                    });
+                  });
 
-                initialMessages[normPhone] = [{
-                  id: 'preview-' + msg.id,
-                  content: msg.body,
-                  timestamp: msg.timestamp,
-                  sender: msg.direction === 'sent' ? 'user' : 'contact',
-                  status: msg.status === 'read' ? MessageStatus.READ : msg.status === 'delivered' ? MessageStatus.DELIVERED : MessageStatus.SENT,
-                  recipientId: normPhone,
-                  attachments: false
-                }];
-              }
-            });
-
-            setAllBackendContacts(backendContacts);
-
-            setMessages(prev => {
-              const merged = { ...initialMessages };
-              Object.keys(prev).forEach(key => {
-                if (prev[key] && prev[key].length > 1) {
-                  merged[key] = prev[key];
+                  setMessages(prev => {
+                    const merged = { ...initialMessages };
+                    Object.keys(prev).forEach(key => {
+                      if (prev[key] && prev[key].length > 1) {
+                        merged[key] = prev[key];
+                      }
+                    });
+                    return merged;
+                  });
                 }
-              });
-              return merged;
-            });
+              })
+              .catch(err => console.error('Failed to hydrate messages from SFMC:', err));
           }
-        })
-        .catch(err => console.error('Failed to hydrate conversations from SFMC:', err));
-    }
+        } else {
+          setAllBackendContacts([]);
+        }
+      })
+      .catch(err => {
+        console.warn('Failed to load contacts for workspace:', wsId, err);
+        setAllBackendContacts([]);
+      });
   }, [activeWorkspace?.id, activeWorkspace?.type]);
 
   // Real-time messages sync

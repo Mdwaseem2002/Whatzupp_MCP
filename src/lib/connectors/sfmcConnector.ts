@@ -44,8 +44,8 @@ export class SFMCConnector implements Connector {
       // Group by phone number
       const contactMap = new Map<string, WorkspaceContactResult>();
       items.forEach((item: any) => {
-        const phone = item.keys?.MobilePhone || item.values?.MobilePhone || item.MobilePhone || item.keys?.Phone || item.values?.Phone || item.Phone;
-        const name = item.keys?.ContactKey || item.values?.ContactKey || item.ContactKey || `Contact ${phone}`;
+        const phone = item.keys?.MobilePhone || item.values?.MobilePhone || item.keys?.mobilephone || item.values?.mobilephone || item.MobilePhone || item.keys?.Phone || item.values?.Phone || item.keys?.phone || item.values?.phone || item.Phone;
+        const name = item.keys?.ContactKey || item.values?.ContactKey || item.keys?.contactkey || item.values?.contactkey || item.ContactKey || `Subscriber ${phone}`;
         if (phone && !contactMap.has(phone)) {
           contactMap.set(phone, {
             id: `sfmc-${phone}`,

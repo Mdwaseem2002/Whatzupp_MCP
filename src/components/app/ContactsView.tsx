@@ -31,34 +31,33 @@ export default function ContactsView() {
 
     const wsId = activeWorkspace.id;
     const isSalesCloud = activeWorkspace.type === 'salescloud' || activeWorkspace.platform === 'sales_cloud' || wsId === 'salescloud-ws-1';
+    const wsKey = isSalesCloud
+      ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+      : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
 
-    if (isSalesCloud) {
-      fetch(`/api/workspaces/${wsId}/contacts`, {
-        headers: { 'X-Workspace-Key': process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret' },
-        cache: 'no-store'
+    fetch(`/api/workspaces/${wsId}/contacts`, {
+      headers: { 'X-Workspace-Key': wsKey },
+      cache: 'no-store'
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.contacts && Array.isArray(data.contacts)) {
+          const formatted: WorkspaceContact[] = data.contacts.map((c: any) => ({
+            id: c.id || c.salesforceRecordId || c.phoneNumber,
+            name: c.name,
+            phoneNumber: c.phoneNumber,
+            email: c.email || '',
+            company: c.company || (wsId === 'sfmc-ws-1' ? 'SFMC Subscriber' : 'Sales Cloud'),
+            tags: c.salesforceObjectType ? [c.salesforceObjectType] : wsId === 'sfmc-ws-1' ? ['SFMC DE'] : ['Sales Cloud'],
+            workspaceId: wsId,
+            createdAt: c.lastSyncedAt || new Date().toISOString(),
+          }));
+          setLiveContacts(formatted);
+        } else {
+          setLiveContacts([]);
+        }
       })
-        .then(res => res.json())
-        .then(data => {
-          if (data.contacts && Array.isArray(data.contacts)) {
-            const formatted: WorkspaceContact[] = data.contacts.map((c: any) => ({
-              id: c.id || c.salesforceRecordId || c.phoneNumber,
-              name: c.name,
-              phoneNumber: c.phoneNumber,
-              email: c.email || '',
-              company: c.company || 'Salesforce',
-              tags: c.salesforceObjectType ? [c.salesforceObjectType] : ['Sales Cloud'],
-              workspaceId: wsId,
-              createdAt: c.lastSyncedAt || new Date().toISOString(),
-            }));
-            setLiveContacts(formatted);
-          } else {
-            setLiveContacts([]);
-          }
-        })
-        .catch(() => setLiveContacts([]));
-    } else {
-      setLiveContacts([]);
-    }
+      .catch(() => setLiveContacts([]));
   }, [activeWorkspace?.id, activeWorkspace?.platform, activeWorkspace?.type, refreshKey]);
 
   if (!activeWorkspace) return null;
