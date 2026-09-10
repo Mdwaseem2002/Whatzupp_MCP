@@ -3,10 +3,7 @@
 // Called by Salesforce Marketing Cloud Journey Builder Custom Activity
 
 import { NextResponse } from 'next/server';
-import connectMongoDB from '@/lib/mongodb';
 import { writeSentMessage } from '@/lib/sfmcDE';
-import MessageModel from '@/models/Message';
-import ConversationModel from '@/models/Conversation';
 import { MessageStatus } from '@/types';
 
 interface SendWhatsAppPayload {
@@ -193,59 +190,16 @@ export async function POST(request: Request) {
 
     // ----- Save to MongoDB & Emit SSE -----
     if (wamid) {
+      // Save template message to Sales Cloud WhatsApp_Message__c
       try {
-        await connectMongoDB();
-
-        const messageData = {
-          id: wamid,
+        const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+        const scConnector = new SalesCloudConnector();
+        await scConnector.sendMessage({
+          recipientPhone: normalizedPhone,
           content: bodyContent,
-          timestamp: new Date().toISOString(),
-          sender: 'user',
-          status: MessageStatus.SENT,
-          recipientId: normalizedPhone,
-          contactPhoneNumber: normalizedPhone,
-          originalId: wamid,
-          conversationId: normalizedPhone,
-        };
-
-        // Save to MongoDB
-        await MessageModel.updateOne(
-          { id: wamid },
-          { $setOnInsert: messageData },
-          { upsert: true }
-        );
-        
-        // Update or create conversation
-        await ConversationModel.updateOne(
-          { phoneNumber: normalizedPhone },
-          { 
-            $set: { 
-              lastMessage: bodyContent,
-              lastMessageTimestamp: messageData.timestamp 
-            },
-            $setOnInsert: { contactName: normalizedPhone, unreadCount: 0 }
-          },
-          { upsert: true }
-        );
-
-        console.log(`[send-whatsapp] Saved template message ${wamid} to MongoDB`);
-
-        // Emit via SSE
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-        await fetch(`${appUrl}/api/messages/stream`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            "x-internal-secret": process.env.JWT_SECRET || 'fallback-secret'
-          },
-          body: JSON.stringify({
-            phoneNumber: normalizedPhone,
-            message: messageData
-          })
-        }).catch(err => console.error('[send-whatsapp] SSE emit failed:', err));
-
-      } catch (dbError) {
-        console.error('[send-whatsapp] Error saving to MongoDB:', dbError);
+        });
+      } catch (scErr) {
+        console.warn('[send-whatsapp] Sales Cloud write failed:', scErr);
       }
 
       // ----- Write to SFMC Data Extension -----

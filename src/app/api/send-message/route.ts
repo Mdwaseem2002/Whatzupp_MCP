@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 import { writeSentMessage } from '@/lib/sfmcDE';
-import connectMongoDB from '@/lib/mongodb';
-import MessageModel from '@/models/Message';
 
 export async function POST(request: Request) {
   try {
@@ -108,34 +106,18 @@ export async function POST(request: Request) {
         console.error('[send-message] SFMC DE write failed:', sfmcError);
       }
 
-      // Write directly to MongoDB for persistence (bypassing internal HTTP fetch)
-      try {
-        await connectMongoDB();
-        await MessageModel.updateOne(
-          { id: wamid },
-          { 
-            $setOnInsert: {
-              id: wamid,
-              timestamp: new Date().toISOString(),
-              sender: 'user',
-              status: 'sent',
-              recipientId: formattedPhone,
-              contactPhoneNumber: formattedPhone,
-              originalId: wamid,
-              conversationId: formattedPhone,
-            },
-            $set: {
-              content: message || `[Media: ${mediaType}]`,
-              mediaType: mediaType || 'text',
-              mediaId: mediaId,
-              mimeType: mimeType,
-              filename: filename
-            }
-          },
-          { upsert: true }
-        );
-      } catch (mongoError) {
-        console.error('[send-message] Direct MongoDB write failed:', mongoError);
+      // Write to Salesforce Sales Cloud WhatsApp_Message__c object if workspace specified
+      if (targetWorkspaceId === 'salescloud-ws-1') {
+        try {
+          const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+          const scConnector = new SalesCloudConnector();
+          await scConnector.sendMessage({
+            recipientPhone: formattedPhone,
+            content: message || `[Media: ${mediaType}]`,
+          });
+        } catch (scErr) {
+          console.warn('[send-message] Sales Cloud write failed:', scErr);
+        }
       }
 
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

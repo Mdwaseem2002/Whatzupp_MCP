@@ -228,13 +228,12 @@ export class SalesCloudConnector implements Connector {
     const wamid = waResult.messageId || `wamid.sc.${Date.now()}`;
     const timestamp = new Date().toISOString();
 
-    // 2. Write record to Salesforce WhatsApp_Message__c object
+    // 2. Write record to Salesforce WhatsApp_Message__c object (Idempotent External ID Upsert)
     try {
       const { access_token, instance_url } = await getSalesCloudAccessToken();
 
       if (!access_token.startsWith('mock-')) {
         const payload: Record<string, any> = {
-          Message_Id__c: wamid,
           Phone__c: params.recipientPhone,
           Content__c: params.content,
           Direction__c: 'OUTBOUND',
@@ -250,15 +249,25 @@ export class SalesCloudConnector implements Connector {
           }
         }
 
-        const insertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c`;
-        await fetch(insertUrl, {
-          method: 'POST',
+        const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
+        await fetch(upsertUrl, {
+          method: 'PATCH',
           headers: {
             Authorization: `Bearer ${access_token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload),
         });
+
+        // Transactionally update WhatZupp_Last_Message__c on Lead or Contact
+        if (params.salesforceRecordId && params.salesforceObjectType) {
+          const objType = params.salesforceObjectType === 'Lead' ? 'Lead' : 'Contact';
+          fetch(`${instance_url}/services/data/v59.0/sobjects/${objType}/${params.salesforceRecordId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+          }).catch(e => console.warn('[SalesCloudConnector] Rollup update failed:', e));
+        }
       } else {
         // Dev fallback
         this.fallbackMessages.push({
@@ -277,6 +286,79 @@ export class SalesCloudConnector implements Connector {
     }
 
     return { messageId: wamid, status: 'SENT' };
+  }
+
+  /**
+   * Idempotently saves an INBOUND message to Salesforce WhatsApp_Message__c object.
+   */
+  async saveInboundMessage(params: {
+    messageId: string;
+    senderPhone: string;
+    content: string;
+    timestamp?: string;
+    leadId?: string;
+    contactId?: string;
+  }): Promise<{ success: boolean; messageId: string }> {
+    const wamid = params.messageId;
+    const timestamp = params.timestamp || new Date().toISOString();
+
+    try {
+      const { access_token, instance_url } = await getSalesCloudAccessToken();
+
+      if (!access_token.startsWith('mock-')) {
+        const payload: Record<string, any> = {
+          Phone__c: params.senderPhone,
+          Content__c: params.content,
+          Direction__c: 'INBOUND',
+          Status__c: 'DELIVERED',
+          Timestamp__c: timestamp,
+        };
+
+        if (params.leadId) payload.Lead__c = params.leadId;
+        if (params.contactId) payload.Contact__c = params.contactId;
+
+        // Idempotent External ID Upsert via Salesforce REST API
+        const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
+        await fetch(upsertUrl, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        // Transactionally update WhatZupp_Last_Message__c on Lead or Contact
+        if (params.leadId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Lead/${params.leadId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+          }).catch(e => console.warn('[SalesCloudConnector] Lead last message rollup failed:', e));
+        } else if (params.contactId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Contact/${params.contactId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+          }).catch(e => console.warn('[SalesCloudConnector] Contact last message rollup failed:', e));
+        }
+      } else {
+        this.fallbackMessages.push({
+          id: wamid,
+          senderId: params.senderPhone,
+          recipientId: 'sc-agent',
+          content: params.content,
+          timestamp,
+          status: 'DELIVERED',
+          direction: 'INBOUND',
+          salesforceRecordId: params.contactId || params.leadId,
+        });
+      }
+      return { success: true, messageId: wamid };
+    } catch (err) {
+      console.error('[SalesCloudConnector] saveInboundMessage failed:', err);
+      return { success: false, messageId: wamid };
+    }
   }
 
   /**

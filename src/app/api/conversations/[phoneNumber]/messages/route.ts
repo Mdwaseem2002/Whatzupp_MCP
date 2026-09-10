@@ -1,19 +1,15 @@
 // src/app/api/conversations/[phoneNumber]/messages/route.ts
 // API route to retrieve message history for a specific phone number
-// Used by Salesforce Lightning Web Component & Web Dashboard
+// Delegates to native Salesforce connectors (SalesCloudConnector / SFMCConnector) based on workspaceId
 
 import { NextResponse } from 'next/server';
-import connectMongoDB from '@/lib/mongodb';
-import MessageModel from '@/models/Message';
-import ConversationModel from '@/models/Conversation';
+import { workspaceRegistry } from '@/lib/connectors/workspaceRegistry';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ phoneNumber: string }> }
 ) {
   try {
-    await connectMongoDB();
-
     const resolvedParams = await params;
     const rawPhone = resolvedParams.phoneNumber;
 
@@ -24,42 +20,34 @@ export async function GET(
       );
     }
 
-    // Normalize phone numbers (e.g. "+919952374972" -> "919952374972", "9952374972" -> "919952374972")
+    const { searchParams } = new URL(request.url);
+    const headerWsId = request.headers.get('x-workspace-id') || request.headers.get('X-Workspace-Id');
+    const workspaceId = searchParams.get('workspaceId') || headerWsId || 'salescloud-ws-1';
+
+    const connector = workspaceRegistry.getConnector(workspaceId);
+    if (!connector) {
+      return NextResponse.json(
+        { success: false, error: `Unknown workspace ${workspaceId}` },
+        { status: 404 }
+      );
+    }
+
     const cleanPhone = rawPhone.replace(/^\+/, '').trim();
-    const shortPhone = cleanPhone.length > 10 ? cleanPhone.slice(-10) : cleanPhone;
+    const page = await connector.fetchMessages({ phoneNumber: cleanPhone });
 
-    // Search query matching full phone, short 10-digit phone, or with + prefix
-    const query = {
-      $or: [
-        { conversationId: cleanPhone },
-        { contactPhoneNumber: cleanPhone },
-        { recipientId: cleanPhone },
-        { conversationId: { $regex: shortPhone + '$' } },
-        { contactPhoneNumber: { $regex: shortPhone + '$' } },
-        { recipientId: { $regex: shortPhone + '$' } },
-      ],
-    };
-
-    const messages = await MessageModel.find(query)
-      .sort({ timestamp: 1 })
-      .lean()
-      .exec();
-
-    // Map messages for Salesforce LWC / Web format
-    const formattedMessages = messages.map((m: any) => ({
-      id: m.id || m._id?.toString(),
-      content: m.content || m.text?.body || '',
-      timestamp: m.timestamp || new Date().toISOString(),
-      sender: m.sender || (m.direction === 'OUTBOUND' ? 'user' : 'contact'),
-      direction: m.sender === 'user' ? 'OUTBOUND' : 'INBOUND',
-      status: m.status || 'DELIVERED',
-      mediaType: m.mediaType || 'text',
-      mediaId: m.mediaId,
-      filename: m.filename,
+    const formattedMessages = page.messages.map((m: any) => ({
+      id: m.id,
+      content: m.content,
+      timestamp: m.timestamp,
+      sender: m.direction === 'OUTBOUND' ? 'user' : 'contact',
+      direction: m.direction,
+      status: m.status,
+      salesforceRecordId: m.salesforceRecordId,
     }));
 
     return NextResponse.json({
       success: true,
+      workspaceId,
       messages: formattedMessages,
       count: formattedMessages.length,
     });

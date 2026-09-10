@@ -1,66 +1,44 @@
+// src/app/api/conversations/route.ts
+// Retrieves active conversations from native workspace connectors (Sales Cloud / SFMC)
+// Bypasses MongoDB completely
+
 import { NextResponse } from 'next/server';
-import connectMongoDB from '@/lib/mongodb';
-import ConversationModel from '@/models/Conversation';
-import MessageModel from '@/models/Message';
+import { workspaceRegistry } from '@/lib/connectors/workspaceRegistry';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    await connectMongoDB();
+    const { searchParams } = new URL(request.url);
+    const headerWsId = request.headers.get('x-workspace-id') || request.headers.get('X-Workspace-Id');
+    const workspaceId = searchParams.get('workspaceId') || headerWsId || 'salescloud-ws-1';
 
-    // Fetch conversations, sorted by last message timestamp
-    const conversations = await ConversationModel.find()
-      .sort({ lastMessageTimestamp: -1 })
-      .limit(50); // Limit to 50 most recent conversations
-
-    // Also discover contacts from messages that don't have a conversation entry yet
-    // This handles older messages stored before the Conversation model was fully used
-    const existingPhones = new Set(conversations.map((c: any) => c.phoneNumber));
-    
-    const orphanedChats = await MessageModel.aggregate([
-      {
-        $group: {
-          _id: { $ifNull: ['$conversationId', '$contactPhoneNumber'] },
-          lastMessage: { $last: '$content' },
-          lastTimestamp: { $max: '$timestamp' },
-          count: { $sum: 1 }
-        }
-      },
-      { $sort: { lastTimestamp: -1 } },
-      { $limit: 50 }
-    ]);
-
-    // Merge orphaned chats into conversations list
-    const mergedConversations = [...conversations];
-    for (const orphan of orphanedChats) {
-      const phone = orphan._id;
-      if (phone && !existingPhones.has(phone)) {
-        mergedConversations.push({
-          _id: phone,
-          phoneNumber: phone,
-          contactName: phone,
-          lastMessage: orphan.lastMessage || '',
-          lastMessageTimestamp: orphan.lastTimestamp,
-          unreadCount: 0
-        });
-        existingPhones.add(phone);
-      }
+    const connector = workspaceRegistry.getConnector(workspaceId);
+    if (!connector) {
+      return NextResponse.json(
+        { success: false, error: `Unknown workspace ${workspaceId}` },
+        { status: 404 }
+      );
     }
 
-    // Sort merged list by timestamp
-    mergedConversations.sort((a: any, b: any) => {
-      const tA = new Date(a.lastMessageTimestamp || 0).getTime();
-      const tB = new Date(b.lastMessageTimestamp || 0).getTime();
-      return tB - tA;
-    });
+    const contacts = await connector.fetchContacts({ limit: 50 });
+    const conversations = contacts.map(c => ({
+      _id: c.id,
+      phoneNumber: c.phoneNumber,
+      contactName: c.name,
+      lastMessage: 'WhatsApp Sync',
+      lastMessageTimestamp: c.lastSyncedAt,
+      unreadCount: 0,
+    }));
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
-      conversations: mergedConversations.slice(0, 50)
+      workspaceId,
+      conversations,
+      count: conversations.length,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error retrieving conversations:', error);
     return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
+      { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
     );
   }
