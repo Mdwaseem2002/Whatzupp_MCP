@@ -11,7 +11,7 @@ import CONTACT_NAME from '@salesforce/schema/Contact.Name';
 import ACCOUNT_PHONE from '@salesforce/schema/Account.Phone';
 import ACCOUNT_NAME from '@salesforce/schema/Account.Name';
 
-const DEFAULT_HTTPS_APP_URL = 'https://cold-coins-invite.loca.lt';
+const DEFAULT_HTTPS_APP_URL = 'https://whatzupp-mcp.vercel.app';
 
 // ─── Emoji Data — categorised common emojis ───
 const EMOJI_CATEGORIES = [
@@ -103,7 +103,7 @@ export default class WhatzuppChatPanel extends LightningElement {
     connectedCallback() {
         try {
             const saved = localStorage.getItem('whatzupp_app_url');
-            if (saved && !saved.startsWith('http://localhost') && !saved.includes('chatty-streets')) {
+            if (saved && !saved.startsWith('http://localhost') && !saved.includes('loca.lt')) {
                 this.settingsAppUrl = saved;
             } else {
                 this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
@@ -131,10 +131,18 @@ export default class WhatzuppChatPanel extends LightningElement {
 
     get appBaseUrl() {
         let url = (this.settingsAppUrl || DEFAULT_HTTPS_APP_URL).trim();
-        if (typeof window !== 'undefined' && window.location.protocol === 'https:' && (url.startsWith('http://localhost') || url.includes('chatty-streets'))) {
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:' && (url.startsWith('http://localhost') || url.includes('loca.lt'))) {
             url = DEFAULT_HTTPS_APP_URL;
         }
         return url.replace(/\/+$/, '');
+    }
+
+    _getHeaders(extraHeaders = {}) {
+        const headers = { ...extraHeaders };
+        if (this.appBaseUrl.includes('loca.lt')) {
+            headers['bypass-tunnel-reminder'] = 'true';
+        }
+        return headers;
     }
 
     // ─── Emoji getters ───
@@ -180,7 +188,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         try {
             const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages`;
             const res = await fetch(endpoint, {
-                headers: { 'bypass-tunnel-reminder': 'true' }
+                headers: this._getHeaders()
             });
             if (res.ok) {
                 const data = await res.json();
@@ -262,10 +270,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             const endpoint = `${this.appBaseUrl}/api/send-message`;
             await fetch(endpoint, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'bypass-tunnel-reminder': 'true'
-                },
+                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     to: this.contactPhone,
                     message: textToSend
@@ -327,7 +332,7 @@ export default class WhatzuppChatPanel extends LightningElement {
     async loadSettingsFromServer() {
         try {
             const res = await fetch(`${this.appBaseUrl}/api/get-env-variables`, {
-                headers: { 'bypass-tunnel-reminder': 'true' }
+                headers: this._getHeaders()
             });
             if (res.ok) {
                 const data = await res.json();
@@ -358,10 +363,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         try {
             const res = await fetch(`${cleanedUrl}/api/save-env`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'bypass-tunnel-reminder': 'true'
-                },
+                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     accessToken: this.settingsAccessToken,
                     phoneNumberId: this.settingsPhoneNumberId
@@ -440,7 +442,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             console.log('Fetching templates from:', endpoint);
 
             const res = await fetch(endpoint, {
-                headers: { 'bypass-tunnel-reminder': 'true' }
+                headers: this._getHeaders()
             });
 
             const data = await res.json().catch(() => null);
@@ -461,7 +463,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             if (e.message && e.message.includes('OAuthException')) {
                 this.templatesError = 'Meta Session Expired: Your Meta Access Token has expired. Please click ⚙️ Settings and paste your fresh Meta Access Token.';
             } else if (e.message && e.message.includes('Failed to fetch')) {
-                this.templatesError = `Network Error: Could not reach server at ${this.appBaseUrl}. Please check your internet connection or localtunnel URL.`;
+                this.templatesError = `Network Error: Could not reach server at ${this.appBaseUrl}. Please check your App URL in Settings ⚙️.`;
             } else {
                 this.templatesError = e.message || 'Failed to load templates from Meta';
             }
@@ -516,10 +518,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             const endpoint = `${this.appBaseUrl}/api/send-whatsapp`;
             await fetch(endpoint, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'bypass-tunnel-reminder': 'true'
-                },
+                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     phone: this.contactPhone,
                     templateName: tpl.name,
@@ -585,7 +584,7 @@ export default class WhatzuppChatPanel extends LightningElement {
 
             const uploadRes = await fetch(`${this.appBaseUrl}/api/media/upload`, {
                 method: 'POST',
-                headers: { 'bypass-tunnel-reminder': 'true' },
+                headers: this._getHeaders(),
                 body: formData
             });
 
@@ -605,10 +604,7 @@ export default class WhatzuppChatPanel extends LightningElement {
 
             await fetch(`${this.appBaseUrl}/api/send-message`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'bypass-tunnel-reminder': 'true'
-                },
+                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     to: this.contactPhone,
                     message: '',
