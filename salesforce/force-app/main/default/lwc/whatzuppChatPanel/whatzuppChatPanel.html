@@ -45,7 +45,49 @@
 
                 <template for:each={messages} for:item="msg">
                     <div key={msg.id} class={msg.bubbleClass}>
-                        <div class="msg-content">{msg.content}</div>
+                        <!-- Media: Image -->
+                        <template if:true={msg.isImage}>
+                            <div class="media-container">
+                                <template if:true={msg.mediaUrl}>
+                                    <img src={msg.mediaUrl} class="msg-media-img" alt="Image Attachment" />
+                                </template>
+                                <template if:false={msg.mediaUrl}>
+                                    <div class="media-placeholder-box">
+                                        <span class="media-icon">🖼️</span>
+                                        <span class="media-label">Image Attachment</span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Media: Video -->
+                        <template if:true={msg.isVideo}>
+                            <div class="media-container">
+                                <template if:true={msg.mediaUrl}>
+                                    <video src={msg.mediaUrl} controls class="msg-media-video"></video>
+                                </template>
+                                <template if:false={msg.mediaUrl}>
+                                    <div class="media-placeholder-box">
+                                        <span class="media-icon">🎥</span>
+                                        <span class="media-label">Video Attachment</span>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Media: Document -->
+                        <template if:true={msg.isDocument}>
+                            <div class="media-doc-box">
+                                <span class="doc-icon">📄</span>
+                                <span class="doc-name">{msg.fileName}</span>
+                            </div>
+                        </template>
+
+                        <!-- Text content -->
+                        <template if:true={msg.isText}>
+                            <div class="msg-content">{msg.content}</div>
+                        </template>
+
                         <div class="msg-meta">
                             <span class="msg-time">{msg.formattedTime}</span>
                             <template if:true={msg.isOutbound}>

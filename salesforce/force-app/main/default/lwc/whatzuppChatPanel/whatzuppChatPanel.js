@@ -197,6 +197,40 @@ export default class WhatzuppChatPanel extends LightningElement {
     // ─── MESSAGES ───
     // ════════════════════════════════════════
 
+    _formatMessageItem(m) {
+        const contentText = m.content || '';
+        const matchMedia = contentText.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || contentText.match(/^\[(image|video|document|audio)\]/i);
+        let mediaType = m.mediaType;
+        if (!mediaType || mediaType === 'text') {
+            if (matchMedia) {
+                mediaType = matchMedia[1].toLowerCase();
+            }
+        }
+
+        const isImage = mediaType === 'image' || mediaType === 'sticker';
+        const isVideo = mediaType === 'video';
+        const isDocument = mediaType === 'document';
+        const isText = !isImage && !isVideo && !isDocument;
+
+        const mediaUrl = m.mediaUrl || (m.mediaId ? `${this.appBaseUrl}/api/media?mediaId=${m.mediaId}` : null);
+        const fileName = m.filename || (matchMedia && matchMedia[1] ? `${matchMedia[1]}.dat` : 'Document Attachment');
+        const isOutbound = m.direction === 'OUTBOUND' || m.sender === 'user';
+        const formattedTime = new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        return {
+            ...m,
+            formattedTime,
+            isOutbound,
+            bubbleClass: `msg-bubble ${isOutbound ? 'msg-outbound' : 'msg-inbound'}`,
+            isImage,
+            isVideo,
+            isDocument,
+            isText,
+            mediaUrl,
+            fileName,
+        };
+    }
+
     async fetchMessages() {
         this.isLoading = true;
         try {
@@ -207,12 +241,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             if (res.ok) {
                 const data = await res.json();
                 const msgs = data.messages || data || [];
-                this.messages = (Array.isArray(msgs) ? msgs : []).map(m => ({
-                    ...m,
-                    formattedTime: new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    isOutbound: m.direction === 'OUTBOUND' || m.sender === 'user',
-                    bubbleClass: `msg-bubble ${(m.direction === 'OUTBOUND' || m.sender === 'user') ? 'msg-outbound' : 'msg-inbound'}`
-                }));
+                this.messages = (Array.isArray(msgs) ? msgs : []).map(m => this._formatMessageItem(m));
             } else {
                 this._useFallbackMessages();
             }
@@ -235,12 +264,7 @@ export default class WhatzuppChatPanel extends LightningElement {
             if (res.ok) {
                 const data = await res.json();
                 const msgs = data.messages || data || [];
-                const formatted = (Array.isArray(msgs) ? msgs : []).map(m => ({
-                    ...m,
-                    formattedTime: new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    isOutbound: m.direction === 'OUTBOUND' || m.sender === 'user',
-                    bubbleClass: `msg-bubble ${(m.direction === 'OUTBOUND' || m.sender === 'user') ? 'msg-outbound' : 'msg-inbound'}`
-                }));
+                const formatted = (Array.isArray(msgs) ? msgs : []).map(m => this._formatMessageItem(m));
 
                 const lastOld = this.messages.length > 0 ? this.messages[this.messages.length - 1].id : null;
                 const lastNew = formatted.length > 0 ? formatted[formatted.length - 1].id : null;
@@ -659,15 +683,16 @@ export default class WhatzuppChatPanel extends LightningElement {
                 })
             });
 
-            const localMsg = {
+            const rawLocal = {
                 id: 'file-' + Date.now(),
                 content: `📎 ${file.name}`,
                 timestamp: new Date().toISOString(),
-                formattedTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 direction: 'OUTBOUND',
-                isOutbound: true,
-                bubbleClass: 'msg-bubble msg-outbound'
+                mediaType,
+                mediaId: uploadData.id,
+                filename: file.name,
             };
+            const localMsg = this._formatMessageItem(rawLocal);
             this.messages = [...this.messages, localMsg];
             this.scrollToBottom();
 

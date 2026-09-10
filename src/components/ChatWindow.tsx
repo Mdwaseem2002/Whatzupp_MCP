@@ -440,6 +440,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   }
                 }
 
+                // Determine effective media type & source
+                const matchMedia = rawText.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || rawText.match(/^\[(image|video|document|audio)\]/i);
+                let effectiveType = message.mediaType;
+                if (!effectiveType || effectiveType === 'text') {
+                  if (matchMedia) effectiveType = matchMedia[1].toLowerCase() as any;
+                }
+
+                const isImage = effectiveType === 'image' || effectiveType === 'sticker';
+                const isVideo = effectiveType === 'video';
+                const isDocument = effectiveType === 'document';
+                const isAudio = effectiveType === 'audio';
+
+                const mediaSrc = message.mediaUrl || (message.mediaId ? `/api/media?mediaId=${message.mediaId}` : null);
+                const captionText = matchMedia ? rawText.replace(/^\[(?:Media:\s*)?(image|video|document|audio)\]\s*/i, '').trim() : rawText;
+
                 return (
                   <motion.div
                     initial={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -501,19 +516,77 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                               </div>
                             )}
 
-                            {/* Text */}
-                            {(!message.mediaType || message.mediaType === 'text') && (
+                            {/* ─── Media: Image ─── */}
+                            {isImage && (
+                              <div className="relative group/media my-1 flex flex-col">
+                                {mediaSrc ? (
+                                  <img
+                                    src={mediaSrc}
+                                    alt="Media Attachment"
+                                    className="rounded-xl object-cover max-w-xs cursor-pointer shadow-sm max-h-[300px] hover:brightness-95 transition-all"
+                                    onClick={() => window.open(mediaSrc, '_blank')}
+                                  />
+                                ) : (
+                                  <div className={`p-4 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
+                                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">
+                                      📷
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <span className="text-xs font-bold uppercase tracking-wide opacity-90">Image Attachment</span>
+                                      <span className="text-[11px] opacity-75">WhatsApp Media</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* ─── Media: Video ─── */}
+                            {isVideo && (
+                              <div className="relative group/media my-1 flex flex-col">
+                                {mediaSrc ? (
+                                  <video src={mediaSrc} controls className="rounded-xl max-w-xs shadow-sm max-h-[280px]" />
+                                ) : (
+                                  <div className={`p-4 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
+                                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">
+                                      🎥
+                                    </div>
+                                    <div className="flex flex-col">
+                                      <span className="text-xs font-bold uppercase tracking-wide opacity-90">Video Attachment</span>
+                                      <span className="text-[11px] opacity-75">WhatsApp Media</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* ─── Media: Document ─── */}
+                            {isDocument && (
+                              <div className={`my-1 p-3 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
+                                <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-xl shrink-0">
+                                  📄
+                                </div>
+                                <div className="flex flex-col min-w-0 flex-1">
+                                  <span className="text-xs font-bold truncate">{message.filename || 'Document Attachment'}</span>
+                                  <span className="text-[10px] opacity-75">File</span>
+                                </div>
+                                {mediaSrc && (
+                                  <a href={mediaSrc} download target="_blank" rel="noreferrer" className="text-xs font-bold underline ml-2">
+                                    Download
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            {/* ─── Text / Caption Content ─── */}
+                            {(!isImage && !isVideo && !isDocument && !isAudio) ? (
                               <span className="text-[15px] leading-relaxed pr-[4.5rem]" style={{ color: isSent ? '#ffffff' : '#111827' }}>
                                 {rawText}
                               </span>
-                            )}
-
-                            {/* Media */}
-                            {(message.mediaType === 'image' || message.mediaType === 'sticker') && message.mediaId && (
-                              <div className="relative group/media my-1">
-                                <img src={`/api/media?mediaId=${message.mediaId}`} alt={message.caption} className="rounded-xl object-cover max-w-xs cursor-pointer shadow-sm min-h-[120px]" />
-                              </div>
-                            )}
+                            ) : captionText ? (
+                              <span className="text-[14px] leading-relaxed mt-1 pr-[4.5rem]" style={{ color: isSent ? '#ffffff' : '#111827' }}>
+                                {captionText}
+                              </span>
+                            ) : null}
 
                             {/* Timestamp + Status */}
                             <div className="absolute right-0 bottom-0 flex items-end gap-1 px-1 py-0.5">

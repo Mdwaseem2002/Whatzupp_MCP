@@ -90,6 +90,9 @@ export async function POST(request: Request) {
         status: 'sent',
         recipientId: formattedPhone,
         contactPhoneNumber: formattedPhone,
+        mediaType,
+        mediaId,
+        mediaUrl: mediaId ? `/api/media?mediaId=${mediaId}` : undefined,
       };
 
       // Write to SFMC Data Extension
