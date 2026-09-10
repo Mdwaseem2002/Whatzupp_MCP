@@ -188,44 +188,67 @@ export async function POST(request: Request) {
     const paramText = Array.isArray(parameters) && parameters.length > 0 ? ` [Params: ${parameters.join(', ')}]` : '';
     const bodyContent = `[Template: ${templateName}]${paramText}`;
 
-    // ----- Save to MongoDB & Emit SSE -----
+    // ----- STRICT WORKSPACE ISOLATION FOR TEMPLATE MESSAGES -----
     if (wamid) {
-      // Save template message to Sales Cloud WhatsApp_Message__c
-      try {
-        const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
-        const scConnector = new SalesCloudConnector();
-        await scConnector.sendMessage({
-          recipientPhone: normalizedPhone,
-          content: bodyContent,
-        });
-      } catch (scErr) {
-        console.warn('[send-whatsapp] Sales Cloud write failed:', scErr);
+      const targetWorkspaceId = (inArgs.workspaceId || body.workspaceId) as string | undefined;
+
+      let isSalesCloud = targetWorkspaceId === 'salescloud-ws-1';
+
+      if (!targetWorkspaceId) {
+        // If workspaceId is not explicitly specified, check if Sales Cloud contact exists
+        try {
+          const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+          const scConnector = new SalesCloudConnector();
+          const scContact = await scConnector.resolveContact({ phoneNumber: normalizedPhone });
+          if (scContact && scContact.salesforceRecordId && !scContact.id.startsWith('sc-lead-')) {
+            isSalesCloud = true;
+          }
+        } catch (e) {
+          console.warn('[send-whatsapp] Sales Cloud contact check failed:', e);
+        }
       }
 
-      // ----- Write to SFMC Data Extension -----
-      try {
-        const contactKey = (inArgs.contactKey || '') as string;
-        const journeyName = (inArgs.journeyName || '') as string;
-        const paramString = Array.isArray(parameters) && parameters.length > 0
-          ? parameters.join(', ')
-          : '';
+      if (isSalesCloud) {
+        // ─── SALES CLOUD ONLY ───
+        try {
+          console.log(`[send-whatsapp] Writing template message ${wamid} to Sales Cloud WhatsApp_Message__c ONLY`);
+          const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+          const scConnector = new SalesCloudConnector();
+          await scConnector.saveOutboundMessage({
+            messageId: wamid,
+            recipientPhone: normalizedPhone,
+            content: bodyContent,
+            status: 'SENT',
+          });
+        } catch (scErr) {
+          console.error('[send-whatsapp] Sales Cloud saveOutboundMessage failed:', scErr);
+        }
+      } else {
+        // ─── SFMC ONLY ───
+        try {
+          console.log(`[send-whatsapp] Writing template message ${wamid} to SFMC DE ONLY`);
+          const contactKey = (inArgs.contactKey || '') as string;
+          const journeyName = (inArgs.journeyName || '') as string;
+          const paramString = Array.isArray(parameters) && parameters.length > 0
+            ? parameters.join(', ')
+            : '';
 
-        await writeSentMessage({
-          WaMid: wamid,
-          ContactKey: contactKey,
-          Phone: formattedPhone,
-          TemplateName: templateName,
-          Language: language || 'en',
-          Parameters: paramString,
-          MessageContent: bodyContent,
-          Status: 'sent',
-          SentTime: new Date().toISOString(),
-          JourneyName: journeyName,
-          Source: contactKey ? 'journey_builder' : 'manual_send',
-        });
-      } catch (sfmcError) {
-        console.error('[send-whatsapp] SFMC DE write failed:', sfmcError);
-        // Don't fail the request — message was already sent successfully
+          await writeSentMessage({
+            WaMid: wamid,
+            ContactKey: contactKey,
+            Phone: formattedPhone,
+            TemplateName: templateName,
+            Language: language || 'en',
+            Parameters: paramString,
+            MessageContent: bodyContent,
+            Status: 'sent',
+            SentTime: new Date().toISOString(),
+            JourneyName: journeyName,
+            Source: contactKey ? 'journey_builder' : 'manual_send',
+          });
+        } catch (sfmcError) {
+          console.error('[send-whatsapp] SFMC DE write failed:', sfmcError);
+        }
       }
     }
 

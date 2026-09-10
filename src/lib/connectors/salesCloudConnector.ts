@@ -1,6 +1,7 @@
 import { Connector, MessagePage, WorkspaceContactResult, FieldMappingSchema, WorkspaceMessage } from './connectorInterface';
 import { getSalesCloudAccessToken } from '../salesCloudAuth';
 import { sendWhatsAppMessage } from '../../services/whatsappService';
+import { emitRealtimeMessage } from '../realtime';
 
 export class SalesCloudConnector implements Connector {
   public id = 'salescloud-ws-1';
@@ -239,31 +240,76 @@ export class SalesCloudConnector implements Connector {
     });
 
     const wamid = waResult.messageId || `wamid.sc.${Date.now()}`;
-    const timestamp = new Date().toISOString();
 
-    // 2. Write record to Salesforce WhatsApp_Message__c object (Idempotent External ID Upsert)
+    // 2. Save outbound message record to Salesforce WhatsApp_Message__c
+    await this.saveOutboundMessage({
+      messageId: wamid,
+      recipientPhone: params.recipientPhone,
+      content: params.content,
+      salesforceRecordId: params.salesforceRecordId,
+      salesforceObjectType: params.salesforceObjectType,
+      status: 'SENT',
+    });
+
+    return { messageId: wamid, status: 'SENT' };
+  }
+
+  /**
+   * Idempotently saves an OUTBOUND message (e.g. template message or standard message) to Salesforce WhatsApp_Message__c object.
+   */
+  async saveOutboundMessage(params: {
+    messageId: string;
+    recipientPhone: string;
+    content: string;
+    timestamp?: string;
+    leadId?: string;
+    contactId?: string;
+    salesforceRecordId?: string;
+    salesforceObjectType?: string;
+    status?: string;
+  }): Promise<{ success: boolean; messageId: string }> {
+    const wamid = params.messageId;
+    const timestamp = params.timestamp || new Date().toISOString();
+    const cleanPhone = params.recipientPhone.replace(/^\+/, '').trim();
+
     try {
+      // Resolve lead/contact ID if not passed directly
+      let leadId = params.leadId;
+      let contactId = params.contactId;
+
+      if (!leadId && !contactId && params.salesforceRecordId && params.salesforceObjectType) {
+        if (params.salesforceObjectType === 'Lead') leadId = params.salesforceRecordId;
+        else if (params.salesforceObjectType === 'Contact') contactId = params.salesforceRecordId;
+      }
+
+      if (!leadId && !contactId) {
+        try {
+          const resolved = await this.resolveContact({ phoneNumber: cleanPhone });
+          if (resolved && resolved.salesforceRecordId && !resolved.id.startsWith('sc-lead-')) {
+            if (resolved.salesforceObjectType === 'Lead') leadId = resolved.salesforceRecordId;
+            else if (resolved.salesforceObjectType === 'Contact') contactId = resolved.salesforceRecordId;
+          }
+        } catch (e) {
+          console.warn('[SalesCloudConnector] Contact resolve in saveOutboundMessage skipped:', e);
+        }
+      }
+
       const { access_token, instance_url } = await getSalesCloudAccessToken();
 
       if (!access_token.startsWith('mock-')) {
         const payload: Record<string, any> = {
-          Phone__c: params.recipientPhone,
+          Phone__c: cleanPhone,
           Content__c: params.content,
           Direction__c: 'OUTBOUND',
-          Status__c: 'SENT',
+          Status__c: (params.status || 'SENT').toUpperCase(),
           Timestamp__c: timestamp,
         };
 
-        if (params.salesforceRecordId) {
-          if (params.salesforceObjectType === 'Lead') {
-            payload.Lead__c = params.salesforceRecordId;
-          } else if (params.salesforceObjectType === 'Contact') {
-            payload.Contact__c = params.salesforceRecordId;
-          }
-        }
+        if (leadId) payload.Lead__c = leadId;
+        if (contactId) payload.Contact__c = contactId;
 
         const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
-        await fetch(upsertUrl, {
+        const res = await fetch(upsertUrl, {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${access_token}`,
@@ -272,33 +318,55 @@ export class SalesCloudConnector implements Connector {
           body: JSON.stringify(payload),
         });
 
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          console.error(`[SalesCloudConnector] saveOutboundMessage upsert failed (${res.status}): ${errText}`);
+        } else {
+          console.log(`[SalesCloudConnector] Saved OUTBOUND message ${wamid} to WhatsApp_Message__c`);
+        }
+
         // Transactionally update WhatZupp_Last_Message__c on Lead or Contact
-        if (params.salesforceRecordId && params.salesforceObjectType) {
-          const objType = params.salesforceObjectType === 'Lead' ? 'Lead' : 'Contact';
-          fetch(`${instance_url}/services/data/v59.0/sobjects/${objType}/${params.salesforceRecordId}`, {
+        if (leadId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Lead/${leadId}`, {
             method: 'PATCH',
             headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
-          }).catch(e => console.warn('[SalesCloudConnector] Rollup update failed:', e));
+          }).catch(e => console.warn('[SalesCloudConnector] Lead last message rollup failed:', e));
+        } else if (contactId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Contact/${contactId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+          }).catch(e => console.warn('[SalesCloudConnector] Contact last message rollup failed:', e));
         }
       } else {
-        // Dev fallback
         this.fallbackMessages.push({
           id: wamid,
           senderId: 'sc-agent',
-          recipientId: params.recipientPhone,
+          recipientId: cleanPhone,
           content: params.content,
           timestamp,
-          status: 'SENT',
+          status: ((params.status || 'SENT').toUpperCase()) as 'SENT' | 'DELIVERED' | 'READ' | 'FAILED',
           direction: 'OUTBOUND',
-          salesforceRecordId: params.salesforceRecordId,
+          salesforceRecordId: contactId || leadId,
         });
       }
-    } catch (err) {
-      console.warn('[SalesCloudConnector] Failed writing message to Salesforce:', err);
-    }
 
-    return { messageId: wamid, status: 'SENT' };
+      // Emit real-time SSE update to UI
+      emitRealtimeMessage(cleanPhone, {
+        id: wamid,
+        content: params.content,
+        timestamp,
+        sender: 'user',
+        status: (params.status || 'SENT').toUpperCase(),
+        recipientId: cleanPhone,
+      }).catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
+
+      return { success: true, messageId: wamid };
+    } catch (err) {
+      console.error('[SalesCloudConnector] saveOutboundMessage failed:', err);
+      return { success: false, messageId: wamid };
+    }
   }
 
   /**
@@ -314,13 +382,14 @@ export class SalesCloudConnector implements Connector {
   }): Promise<{ success: boolean; messageId: string }> {
     const wamid = params.messageId;
     const timestamp = params.timestamp || new Date().toISOString();
+    const cleanPhone = params.senderPhone.replace(/^\+/, '').trim();
 
     try {
       const { access_token, instance_url } = await getSalesCloudAccessToken();
 
       if (!access_token.startsWith('mock-')) {
         const payload: Record<string, any> = {
-          Phone__c: params.senderPhone,
+          Phone__c: cleanPhone,
           Content__c: params.content,
           Direction__c: 'INBOUND',
           Status__c: 'DELIVERED',
@@ -358,7 +427,7 @@ export class SalesCloudConnector implements Connector {
       } else {
         this.fallbackMessages.push({
           id: wamid,
-          senderId: params.senderPhone,
+          senderId: cleanPhone,
           recipientId: 'sc-agent',
           content: params.content,
           timestamp,
@@ -367,6 +436,17 @@ export class SalesCloudConnector implements Connector {
           salesforceRecordId: params.contactId || params.leadId,
         });
       }
+
+      // Emit real-time SSE update to UI
+      emitRealtimeMessage(cleanPhone, {
+        id: wamid,
+        content: params.content,
+        timestamp,
+        sender: 'contact',
+        status: 'DELIVERED',
+        recipientId: 'user',
+      }).catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
+
       return { success: true, messageId: wamid };
     } catch (err) {
       console.error('[SalesCloudConnector] saveInboundMessage failed:', err);

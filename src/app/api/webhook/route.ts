@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { writeReceivedMessage, updateSentMessageStatus, writeOptOutStatus } from '@/lib/sfmcDE';
 import { SalesCloudConnector } from '@/lib/connectors/salesCloudConnector';
 import { pushUnmatched } from '@/lib/storage/kvStore';
+import { emitRealtimeMessage } from '@/lib/realtime';
 
 const salesCloudConnector = new SalesCloudConnector();
 
@@ -193,6 +194,14 @@ export async function POST(request: Request) {
                       MessageContent: contentText || '',
                       ReceivedTime: msgIsoTimestamp,
                     });
+                    emitRealtimeMessage(normalizedPhone, {
+                      id: messageId,
+                      content: contentText || '',
+                      timestamp: msgIsoTimestamp,
+                      sender: 'contact',
+                      status: 'DELIVERED',
+                      recipientId: 'user',
+                    }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
                   } else {
                     // ----- Step 3: Neither workspace configured — Unmatched Queue -----
                     console.log(`[webhook] Phone ${normalizedPhone} matched neither workspace. Pushing to Unmatched Queue.`);

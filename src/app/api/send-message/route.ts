@@ -148,9 +148,11 @@ export async function POST(request: Request) {
         try {
           const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
           const scConnector = new SalesCloudConnector();
-          await scConnector.sendMessage({
+          await scConnector.saveOutboundMessage({
+            messageId: wamid,
             recipientPhone: formattedPhone,
             content: formattedMediaContent,
+            status: 'SENT',
           });
           console.log('[send-message] Wrote sent message to Sales Cloud WhatsApp_Message__c');
         } catch (scErr) {
