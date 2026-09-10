@@ -6,7 +6,21 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { to, message, mediaId, mediaType, mimeType, filename, localId, workspaceId: bodyWsId } = body;
     const headerWsId = request.headers.get('x-workspace-id') || request.headers.get('X-Workspace-Id');
-    const targetWorkspaceId = bodyWsId || headerWsId;
+    let targetWorkspaceId = bodyWsId || headerWsId;
+
+    if (!targetWorkspaceId && to) {
+      try {
+        const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+        const scConnector = new SalesCloudConnector();
+        const cleanPhone = to.replace(/[^0-9]/g, '');
+        const scContact = await scConnector.resolveContact({ phoneNumber: cleanPhone });
+        if (scContact && scContact.salesforceRecordId) {
+          targetWorkspaceId = 'salescloud-ws-1';
+        }
+      } catch (e) {
+        // Fallback to undefined
+      }
+    }
 
     if (targetWorkspaceId) {
       const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');

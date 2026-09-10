@@ -200,7 +200,7 @@ export async function POST(request: Request) {
           const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
           const scConnector = new SalesCloudConnector();
           const scContact = await scConnector.resolveContact({ phoneNumber: normalizedPhone });
-          if (scContact && scContact.salesforceRecordId && !scContact.id.startsWith('sc-lead-')) {
+          if (scContact && scContact.salesforceRecordId) {
             isSalesCloud = true;
           }
         } catch (e) {

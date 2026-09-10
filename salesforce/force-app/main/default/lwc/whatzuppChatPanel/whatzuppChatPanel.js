@@ -103,7 +103,7 @@ export default class WhatzuppChatPanel extends LightningElement {
     connectedCallback() {
         try {
             const saved = localStorage.getItem('whatzupp_app_url');
-            if (saved && !saved.startsWith('http://localhost') && !saved.includes('loca.lt')) {
+            if (saved && !saved.startsWith('http://localhost')) {
                 this.settingsAppUrl = saved;
             } else {
                 this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
@@ -145,7 +145,7 @@ export default class WhatzuppChatPanel extends LightningElement {
 
     get appBaseUrl() {
         let url = (this.settingsAppUrl || DEFAULT_HTTPS_APP_URL).trim();
-        if (typeof window !== 'undefined' && window.location.protocol === 'https:' && (url.startsWith('http://localhost') || url.includes('loca.lt'))) {
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:' && url.startsWith('http://localhost')) {
             url = DEFAULT_HTTPS_APP_URL;
         }
         return url.replace(/\/+$/, '');
@@ -258,9 +258,9 @@ export default class WhatzuppChatPanel extends LightningElement {
     async fetchMessages() {
         this.isLoading = true;
         try {
-            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages`;
+            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages?workspaceId=salescloud-ws-1`;
             const res = await fetch(endpoint, {
-                headers: this._getHeaders()
+                headers: this._getHeaders({ 'X-Workspace-Id': 'salescloud-ws-1' })
             });
             if (res.ok) {
                 const data = await res.json();
@@ -281,9 +281,9 @@ export default class WhatzuppChatPanel extends LightningElement {
     async fetchMessagesSilently() {
         if (!this.contactPhone) return;
         try {
-            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages`;
+            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages?workspaceId=salescloud-ws-1`;
             const res = await fetch(endpoint, {
-                headers: this._getHeaders()
+                headers: this._getHeaders({ 'X-Workspace-Id': 'salescloud-ws-1' })
             });
             if (res.ok) {
                 const data = await res.json();
@@ -362,10 +362,13 @@ export default class WhatzuppChatPanel extends LightningElement {
             const endpoint = `${this.appBaseUrl}/api/send-message`;
             await fetch(endpoint, {
                 method: 'POST',
-                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
+                headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
                 body: JSON.stringify({
                     to: this.contactPhone,
-                    message: textToSend
+                    message: textToSend,
+                    workspaceId: 'salescloud-ws-1',
+                    salesforceRecordId: this.recordId,
+                    salesforceObjectType: this.objectApiName
                 })
             });
         } catch (e) {
@@ -610,12 +613,15 @@ export default class WhatzuppChatPanel extends LightningElement {
             const endpoint = `${this.appBaseUrl}/api/send-whatsapp`;
             await fetch(endpoint, {
                 method: 'POST',
-                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
+                headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
                 body: JSON.stringify({
                     phone: this.contactPhone,
                     templateName: tpl.name,
                     language: tpl.language || 'en',
-                    parameters: []
+                    parameters: [],
+                    workspaceId: 'salescloud-ws-1',
+                    salesforceRecordId: this.recordId,
+                    salesforceObjectType: this.objectApiName
                 })
             });
         } catch (e) {

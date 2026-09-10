@@ -161,15 +161,20 @@ export class SalesCloudConnector implements Connector {
       }
 
       // Build Keyset SOQL query
-      const conditions: string[] = [];
+      const matchConditions: string[] = [];
       if (params.recordId) {
         const safeId = params.recordId.replace(/'/g, "\\'");
-        conditions.push(`(Lead__c = '${safeId}' OR Contact__c = '${safeId}' OR Opportunity__c = '${safeId}')`);
+        matchConditions.push(`Lead__c = '${safeId}' OR Contact__c = '${safeId}' OR Opportunity__c = '${safeId}'`);
       }
       if (params.phoneNumber) {
         const safePhone = params.phoneNumber.replace(/'/g, "\\'");
         const last10 = safePhone.length >= 10 ? safePhone.slice(-10) : safePhone;
-        conditions.push(`(Phone__c = '${safePhone}' OR Phone__c LIKE '%${last10}')`);
+        matchConditions.push(`Phone__c = '${safePhone}' OR Phone__c LIKE '%${last10}'`);
+      }
+
+      const conditions: string[] = [];
+      if (matchConditions.length > 0) {
+        conditions.push(`(${matchConditions.join(' OR ')})`);
       }
       if (params.cursor) {
         const safeCursor = params.cursor.replace(/'/g, "\\'");
@@ -285,7 +290,7 @@ export class SalesCloudConnector implements Connector {
       if (!leadId && !contactId) {
         try {
           const resolved = await this.resolveContact({ phoneNumber: cleanPhone });
-          if (resolved && resolved.salesforceRecordId && !resolved.id.startsWith('sc-lead-')) {
+          if (resolved && resolved.salesforceRecordId) {
             if (resolved.salesforceObjectType === 'Lead') leadId = resolved.salesforceRecordId;
             else if (resolved.salesforceObjectType === 'Contact') contactId = resolved.salesforceRecordId;
           }

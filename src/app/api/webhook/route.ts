@@ -161,7 +161,7 @@ export async function POST(request: Request) {
                 let scContact: any = null;
                 try {
                   scContact = await salesCloudConnector.resolveContact({ phoneNumber: normalizedPhone });
-                  if (scContact && scContact.salesforceRecordId && !scContact.id.startsWith('sc-lead-')) {
+                  if (scContact && scContact.salesforceRecordId) {
                     hasSalesCloudMatch = true;
                   }
                 } catch (e) {
