@@ -29,7 +29,7 @@ const EMOJI_CATEGORIES = [
     },
     {
         name: 'Objects', icon: '📱',
-        emojis: ['📱','💻','⌨️','🖥️','🖨️','📷','📹','🎥','📞','☎️','📺','📻','🎙️','⏰','⌚','📡','🔋','💡','flashlight','💵','💰','💳','✉️','📧','📦','📋','📝','✏️','📌','📎','🔑','🔒']
+        emojis: ['📱','💻','⌨️','🖥️','🖨️','📷','📹','📞','☎️','📺','📻','🎙️','⏰','⌚','📡','🔋','💡','flashlight','💵','💰','💳','✉️','📧','📦','📋','📝','✏️','📌','📎','🔑','🔒']
     },
     {
         name: 'Symbols', icon: '✅',
@@ -103,7 +103,7 @@ export default class WhatzuppChatPanel extends LightningElement {
     connectedCallback() {
         try {
             const saved = localStorage.getItem('whatzupp_app_url');
-            if (saved && !saved.startsWith('http://localhost')) {
+            if (saved && !saved.startsWith('http://localhost') && !saved.includes('vercel.app')) {
                 this.settingsAppUrl = saved;
             } else {
                 this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
