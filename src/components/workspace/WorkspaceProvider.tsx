@@ -122,9 +122,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         const res = await fetch('/api/user/sync');
         if (res.ok) {
           const { data } = await res.json();
-          const workspaces = (data.workspaces && data.workspaces.length > 0)
+          let rawWorkspaces = (data.workspaces && data.workspaces.length > 0)
             ? data.workspaces
             : DEFAULT_WORKSPACES;
+
+          // Sanitize legacy "Default Workspace" names or fallback IDs
+          const workspaces = rawWorkspaces.map((w: any) => {
+            if (w.name === 'Default Workspace' || w.id === 'default') {
+              return {
+                ...w,
+                id: w.type === 'sfmc' ? 'sfmc-ws-1' : 'salescloud-ws-1',
+                name: w.type === 'sfmc' ? 'Marketing Cloud Workspace' : 'Sales Cloud Workspace',
+              };
+            }
+            return w;
+          });
 
           if (typeof window !== 'undefined') {
             localStorage.setItem('wz_cached_workspaces', JSON.stringify(workspaces));

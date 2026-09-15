@@ -2,6 +2,8 @@ import { Connector, MessagePage, WorkspaceContactResult, FieldMappingSchema, Wor
 import { getSfmcAccessToken } from '../sfmcAuth';
 import { writeSentMessage, writeReceivedMessage } from '../sfmcDE';
 import { sendWhatsAppMessage } from '../../services/whatsappService';
+import { setConversationOwner } from '../storage/kvStore';
+import { normalizePhoneNumber } from '../../utils/phone';
 
 export class SFMCConnector implements Connector {
   public id = 'sfmc-ws-1';
@@ -300,14 +302,36 @@ function normalizeTimestamp(raw: string): string {
       console.warn('[SFMCConnector] Failed to write to SFMC DE:', e);
     }
 
+    // Set conversation ownership (Centralized Choke Point for SFMC)
+    try {
+      await setConversationOwner(params.recipientPhone, this.id, 'outbound');
+    } catch (e) {
+      console.warn('[SFMCConnector] Failed to update conversation owner:', e);
+    }
+
     return { messageId: wamid, status: 'SENT' };
+  }
+
+  async findContact(params: {
+    phoneNumber: string;
+  }): Promise<WorkspaceContactResult | null> {
+    const contacts = await this.fetchContacts({ search: params.phoneNumber });
+    const normSearch = normalizePhoneNumber(params.phoneNumber);
+    const match = contacts.find(c => {
+      const normC = normalizePhoneNumber(c.phoneNumber);
+      return normC === normSearch || (normC.length >= 10 && normSearch.length >= 10 && normC.slice(-10) === normSearch.slice(-10));
+    });
+    return match || null;
   }
 
   async resolveContact(params: {
     phoneNumber: string;
     name?: string;
     email?: string;
-  }): Promise<WorkspaceContactResult> {
+  }): Promise<WorkspaceContactResult | null> {
+    const existing = await this.findContact({ phoneNumber: params.phoneNumber });
+    if (existing) return existing;
+
     return {
       id: `sfmc-${params.phoneNumber}`,
       name: params.name || `Subscriber ${params.phoneNumber}`,

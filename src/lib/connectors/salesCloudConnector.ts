@@ -1,7 +1,9 @@
 import { Connector, MessagePage, WorkspaceContactResult, FieldMappingSchema, WorkspaceMessage } from './connectorInterface';
-import { getSalesCloudAccessToken } from '../salesCloudAuth';
+import { getSalesCloudAccessToken, invalidateSalesCloudToken } from '../salesCloudAuth';
 import { sendWhatsAppMessage } from '../../services/whatsappService';
 import { emitRealtimeMessage } from '../realtime';
+import { setConversationOwner } from '../storage/kvStore';
+import { normalizePhoneNumber } from '../../utils/phone';
 
 export class SalesCloudConnector implements Connector {
   public id = 'salescloud-ws-1';
@@ -367,6 +369,13 @@ export class SalesCloudConnector implements Connector {
         recipientId: cleanPhone,
       }).catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
 
+      // Set conversation ownership (Centralized Choke Point for Sales Cloud)
+      try {
+        await setConversationOwner(cleanPhone, this.id, 'outbound');
+      } catch (e) {
+        console.warn('[SalesCloudConnector] Failed to update conversation owner:', e);
+      }
+
       return { success: true, messageId: wamid };
     } catch (err) {
       console.error('[SalesCloudConnector] saveOutboundMessage failed:', err);
@@ -406,7 +415,8 @@ export class SalesCloudConnector implements Connector {
 
         // Idempotent External ID Upsert via Salesforce REST API
         const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
-        await fetch(upsertUrl, {
+        console.log(`[SalesCloudConnector] saveInboundMessage: upserting ${wamid} from ${cleanPhone}, Lead=${params.leadId}, Contact=${params.contactId}`);
+        const upsertRes = await fetch(upsertUrl, {
           method: 'PATCH',
           headers: {
             Authorization: `Bearer ${access_token}`,
@@ -414,6 +424,33 @@ export class SalesCloudConnector implements Connector {
           },
           body: JSON.stringify(payload),
         });
+
+        if (!upsertRes.ok) {
+          const errText = await upsertRes.text().catch(() => '');
+          console.error(`[SalesCloudConnector] saveInboundMessage upsert FAILED (${upsertRes.status}): ${errText}`);
+          // If 401, try to refresh token and retry once
+          if (upsertRes.status === 401) {
+            console.warn('[SalesCloudConnector] Token expired during saveInboundMessage, attempting refresh...');
+            const fresh = await getSalesCloudAccessToken(true);
+            const retryUrl = `${fresh.instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
+            const retryRes = await fetch(retryUrl, {
+              method: 'PATCH',
+              headers: {
+                Authorization: `Bearer ${fresh.access_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            });
+            if (!retryRes.ok) {
+              const retryErr = await retryRes.text().catch(() => '');
+              console.error(`[SalesCloudConnector] saveInboundMessage RETRY ALSO FAILED (${retryRes.status}): ${retryErr}`);
+            } else {
+              console.log(`[SalesCloudConnector] saveInboundMessage RETRY succeeded for ${wamid}`);
+            }
+          }
+        } else {
+          console.log(`[SalesCloudConnector] saveInboundMessage: successfully upserted ${wamid}`);
+        }
 
         // Transactionally update WhatZupp_Last_Message__c on Lead or Contact
         if (params.leadId) {
@@ -459,6 +496,98 @@ export class SalesCloudConnector implements Connector {
     }
   }
 
+  private async execSoql(soql: string): Promise<any[]> {
+    try {
+      let { access_token, instance_url } = await getSalesCloudAccessToken();
+      if (access_token.startsWith('mock-')) return [];
+
+      let queryUrl = `${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`;
+      let res = await fetch(queryUrl, { headers: { Authorization: `Bearer ${access_token}` } });
+
+      if (res.status === 401) {
+        console.warn('[SalesCloudConnector] 401 Unauthorized during SOQL. Invalidating token & retrying...');
+        invalidateSalesCloudToken();
+        const fresh = await getSalesCloudAccessToken(true);
+        access_token = fresh.access_token;
+        instance_url = fresh.instance_url;
+        queryUrl = `${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`;
+        res = await fetch(queryUrl, { headers: { Authorization: `Bearer ${access_token}` } });
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        return data.records || [];
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.error(`[SalesCloudConnector] SOQL query error (${res.status}): ${errText}`);
+      }
+    } catch (err) {
+      console.error('[SalesCloudConnector] execSoql exception:', err);
+    }
+    return [];
+  }
+
+  async findContact(params: {
+    phoneNumber: string;
+  }): Promise<WorkspaceContactResult | null> {
+    const phone = params.phoneNumber;
+
+    try {
+      const safePhone = phone.replace(/'/g, "\\'");
+      const cleanDigits = phone.replace(/[^0-9]/g, '');
+      const last10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+
+      // 1. Query existing Contact first
+      const contactSoql = `SELECT Id, Name, Email, Phone, MobilePhone FROM Contact WHERE Phone = '${safePhone}' OR MobilePhone = '${safePhone}' OR Phone LIKE '%${last10}' OR MobilePhone LIKE '%${last10}' LIMIT 1`;
+      const contactRecords = await this.execSoql(contactSoql);
+
+      if (contactRecords.length > 0) {
+        const r = contactRecords[0];
+        return {
+          id: r.Id,
+          name: r.Name,
+          phoneNumber: phone,
+          salesforceObjectType: 'Contact',
+          salesforceRecordId: r.Id,
+          email: r.Email,
+          company: 'Salesforce Contact',
+          lastSyncedAt: new Date().toISOString(),
+        };
+      }
+
+      // 2. Query existing Lead second
+      const leadSoql = `SELECT Id, Name, Email, Phone, MobilePhone, Company FROM Lead WHERE Phone = '${safePhone}' OR MobilePhone = '${safePhone}' OR Phone LIKE '%${last10}' OR MobilePhone LIKE '%${last10}' LIMIT 1`;
+      const leadRecords = await this.execSoql(leadSoql);
+
+      if (leadRecords.length > 0) {
+        const r = leadRecords[0];
+        return {
+          id: r.Id,
+          name: r.Name,
+          phoneNumber: phone,
+          salesforceObjectType: 'Lead',
+          salesforceRecordId: r.Id,
+          email: r.Email,
+          company: r.Company || 'Salesforce Lead',
+          lastSyncedAt: new Date().toISOString(),
+        };
+      }
+
+      // 3. Fallback mock list check
+      const normSearch = normalizePhoneNumber(phone);
+      const fallbackMatch = this.fallbackContacts.find(c => {
+        const normC = normalizePhoneNumber(c.phoneNumber);
+        return normC === normSearch || (normC.length >= 10 && normSearch.length >= 10 && normC.slice(-10) === normSearch.slice(-10));
+      });
+      if (fallbackMatch) return fallbackMatch;
+
+    } catch (err) {
+      console.warn('[SalesCloudConnector] findContact error:', err);
+    }
+
+    return null;
+  }
+
   /**
    * Idempotently resolves or creates a Lead/Contact in Sales Cloud.
    */
@@ -466,118 +595,8 @@ export class SalesCloudConnector implements Connector {
     phoneNumber: string;
     name?: string;
     email?: string;
-  }): Promise<WorkspaceContactResult> {
-    const phone = params.phoneNumber;
-    const name = params.name || `Lead ${phone}`;
-
-    try {
-      const { access_token, instance_url } = await getSalesCloudAccessToken();
-
-      if (!access_token.startsWith('mock-')) {
-        // Query existing Contact or Lead
-        const safePhone = phone.replace(/'/g, "\\'");
-        const soql = `SELECT Id, Name, Email, Phone, MobilePhone FROM Contact WHERE Phone = '${safePhone}' OR MobilePhone = '${safePhone}' LIMIT 1`;
-        const queryUrl = `${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`;
-        const res = await fetch(queryUrl, { headers: { Authorization: `Bearer ${access_token}` } });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.records && data.records.length > 0) {
-            const r = data.records[0];
-            return {
-              id: r.Id,
-              name: r.Name,
-              phoneNumber: phone,
-              salesforceObjectType: 'Contact',
-              salesforceRecordId: r.Id,
-              email: r.Email,
-              company: 'Salesforce Contact',
-              lastSyncedAt: new Date().toISOString(),
-            };
-          }
-        }
-
-        // If no contact found, query Lead
-        const leadSoql = `SELECT Id, Name, Email, Phone, MobilePhone, Company FROM Lead WHERE Phone = '${safePhone}' OR MobilePhone = '${safePhone}' LIMIT 1`;
-        const leadRes = await fetch(`${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(leadSoql)}`, {
-          headers: { Authorization: `Bearer ${access_token}` },
-        });
-
-        if (leadRes.ok) {
-          const leadData = await leadRes.json();
-          if (leadData.records && leadData.records.length > 0) {
-            const r = leadData.records[0];
-            return {
-              id: r.Id,
-              name: r.Name,
-              phoneNumber: phone,
-              salesforceObjectType: 'Lead',
-              salesforceRecordId: r.Id,
-              email: r.Email,
-              company: r.Company || 'Salesforce Lead',
-              lastSyncedAt: new Date().toISOString(),
-            };
-          }
-        }
-
-        // Create new Lead if neither exists
-        const nameParts = name.trim().split(' ');
-        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'WhatsApp';
-        const firstName = nameParts.length > 1 ? nameParts[0] : nameParts[0];
-
-        const createLeadUrl = `${instance_url}/services/data/v59.0/sobjects/Lead`;
-        const createRes = await fetch(createLeadUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            FirstName: firstName,
-            LastName: lastName,
-            Company: 'WhatsApp Inbound',
-            Phone: phone,
-            MobilePhone: phone,
-            Email: params.email || `${phone}@whatsapp-lead.com`,
-            WhatZupp_Sync_Status__c: 'Synced',
-            WhatZupp_Last_Synced__c: new Date().toISOString(),
-          }),
-        });
-
-        if (createRes.ok) {
-          const newLead = await createRes.json();
-          return {
-            id: newLead.id,
-            name: `${firstName} ${lastName}`,
-            phoneNumber: phone,
-            salesforceObjectType: 'Lead',
-            salesforceRecordId: newLead.id,
-            email: params.email || `${phone}@whatsapp-lead.com`,
-            company: 'WhatsApp Inbound',
-            lastSyncedAt: new Date().toISOString(),
-          };
-        }
-      }
-    } catch (err) {
-      console.warn('[SalesCloudConnector] resolveContact failed, using fallback:', err);
-    }
-
-    // Fallback resolution
-    let existing = this.fallbackContacts.find(c => c.phoneNumber === phone);
-    if (!existing) {
-      existing = {
-        id: `sc-lead-${phone}`,
-        name: params.name || `Lead ${phone}`,
-        phoneNumber: phone,
-        salesforceObjectType: 'Lead',
-        salesforceRecordId: `00Q${Date.now()}AAA`,
-        email: params.email || `${phone}@salescloud.com`,
-        company: 'WhatsApp Prospect',
-        lastSyncedAt: new Date().toISOString(),
-      };
-      this.fallbackContacts.push(existing);
-    }
-    return existing;
+  }): Promise<WorkspaceContactResult | null> {
+    return this.findContact({ phoneNumber: params.phoneNumber });
   }
 
   /**

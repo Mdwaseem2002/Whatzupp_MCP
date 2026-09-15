@@ -1,6 +1,19 @@
 import { NextResponse } from 'next/server';
 import { writeSentMessage } from '@/lib/sfmcDE';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Workspace-Id, X-Workspace-Key, bypass-tunnel-reminder',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -30,6 +43,8 @@ export async function POST(request: Request) {
         const result = await connector.sendMessage({
           recipientPhone: formattedPhone,
           content: message || '',
+          salesforceRecordId: body.salesforceRecordId,
+          salesforceObjectType: body.salesforceObjectType,
         });
 
         // Broadcast SSE for real-time UI updates
@@ -66,16 +81,20 @@ export async function POST(request: Request) {
         }).catch(err => console.error('[send-message] SSE global emit failed:', err));
 
         // Return in the format the frontend expects (data.messages[0].id for wamid extraction)
-        return NextResponse.json({
-          success: true,
-          data: { messages: [{ id: result.messageId }] },
-          workspaceId: targetWorkspaceId,
-        });
+        return NextResponse.json(
+          {
+            success: true,
+            data: { messages: [{ id: result.messageId }] },
+            workspaceId: targetWorkspaceId,
+          },
+          { headers: corsHeaders }
+        );
       }
     }
 
-    // Always prefer server-side env (updated in real-time via /api/save-env)
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN || body.accessToken;
+    const authHeader = request.headers.get('authorization');
+    const headerToken = (authHeader && authHeader.startsWith('Bearer ')) ? authHeader.substring(7).trim() : null;
+    const accessToken = headerToken || body.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || body.phoneNumberId;
 
     if (!to || (!message && !mediaId) || !accessToken || !phoneNumberId) {

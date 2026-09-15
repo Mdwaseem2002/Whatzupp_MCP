@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "id": "wamid.test.ambiguous.1789451964584",
+    "phoneNumber": "918888888888",
+    "content": "Ambiguous query",
+    "timestamp": "2026-09-15T05:59:24.000Z",
+    "status": "unmatched",
+    "rawPayload": {
+      "id": "wamid.test.ambiguous.1789451964584",
+      "from": "918888888888",
+      "type": "text",
+      "text": {
+        "body": "Ambiguous query"
+      },
+      "timestamp": "1789451964"
+    }
+  }
+]

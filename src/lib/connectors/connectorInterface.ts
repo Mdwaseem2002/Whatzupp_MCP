@@ -53,11 +53,15 @@ export interface Connector {
     salesforceObjectType?: string;
   }): Promise<{ messageId: string; status: string }>;
 
+  findContact(params: {
+    phoneNumber: string;
+  }): Promise<WorkspaceContactResult | null>;
+
   resolveContact(params: {
     phoneNumber: string;
     name?: string;
     email?: string;
-  }): Promise<WorkspaceContactResult>;
+  }): Promise<WorkspaceContactResult | null>;
 
   createContact(params: {
     name: string;

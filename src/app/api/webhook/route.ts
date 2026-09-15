@@ -5,11 +5,10 @@
 
 import { NextResponse } from 'next/server';
 import { writeReceivedMessage, updateSentMessageStatus, writeOptOutStatus } from '@/lib/sfmcDE';
-import { SalesCloudConnector } from '@/lib/connectors/salesCloudConnector';
-import { pushUnmatched } from '@/lib/storage/kvStore';
+import { workspaceRegistry } from '@/lib/connectors/workspaceRegistry';
+import { pushUnmatched, getConversationOwner, setConversationOwner } from '@/lib/storage/kvStore';
+import { normalizePhoneNumber } from '@/utils/phone';
 import { emitRealtimeMessage } from '@/lib/realtime';
-
-const salesCloudConnector = new SalesCloudConnector();
 
 // ----- Idempotency: Track processed wamids in-memory -----
 const processedWamids = new Set<string>();
@@ -144,72 +143,141 @@ export async function POST(request: Request) {
                   }
                 }
 
-                const normalizedPhone = (message.from as string).replace(/^\+/, '');
+                const normalizedPhone = normalizePhoneNumber(message.from as string);
                 const messageId = (message.id as string) || `wamid_${Date.now()}`;
                 const msgIsoTimestamp = message.timestamp
                   ? new Date(Number(message.timestamp) * 1000).toISOString()
                   : new Date().toISOString();
 
-                // ─── STRICT WORKSPACE ISOLATION ───
-                // Each workspace is isolated — messages go to ONE platform only.
-                // Sales Cloud client → WhatsApp_Message__c ONLY
-                // SFMC client → SFMC DE ONLY
-                // Never cross-write between workspaces.
-
-                // ----- Step 1: Check Sales Cloud Workspace Match -----
-                let hasSalesCloudMatch = false;
-                let scContact: any = null;
-                try {
-                  scContact = await salesCloudConnector.resolveContact({ phoneNumber: normalizedPhone });
-                  if (scContact && scContact.salesforceRecordId) {
-                    hasSalesCloudMatch = true;
-                  }
-                } catch (e) {
-                  console.warn('[webhook] Sales Cloud resolveContact check failed:', e);
+                // Idempotency check for incoming wamid
+                if (!markWamidProcessed(messageId)) {
+                  console.log(`[webhook] Skipping duplicate inbound message: ${messageId}`);
+                  continue;
                 }
 
-                if (hasSalesCloudMatch) {
-                  // ─── SALES CLOUD ONLY ───
-                  console.log(`[webhook] Sales Cloud match for ${normalizedPhone}. Writing to WhatsApp_Message__c ONLY.`);
-                  await salesCloudConnector.saveInboundMessage({
-                    messageId,
-                    senderPhone: normalizedPhone,
-                    content: contentText,
-                    timestamp: msgIsoTimestamp,
-                    leadId: scContact?.salesforceObjectType === 'Lead' ? scContact.salesforceRecordId : undefined,
-                    contactId: scContact?.salesforceObjectType === 'Contact' ? scContact.salesforceRecordId : undefined,
-                  });
-                } else {
-                  // ----- Step 2: No Sales Cloud match — Check SFMC -----
-                  const sfmcConfigured = !!(process.env.SFMC_REST_BASE_URI && process.env.SFMC_CLIENT_ID);
+                // ─── ONE CONVERSATION, ONE OWNING WORKSPACE ROUTING ───
 
-                  if (sfmcConfigured) {
-                    // ─── SFMC ONLY ───
-                    console.log(`[webhook] No Sales Cloud match. Writing to SFMC WhatsApp_Received_Messages DE for ${normalizedPhone}.`);
-                    await writeReceivedMessage({
-                      WaMid: messageId,
-                      Phone: normalizedPhone,
-                      ContactName: '',
-                      MessageType: message.type as string || 'text',
-                      MessageContent: contentText || '',
-                      ReceivedTime: msgIsoTimestamp,
-                    });
-                    emitRealtimeMessage(normalizedPhone, {
-                      id: messageId,
-                      content: contentText || '',
-                      timestamp: msgIsoTimestamp,
-                      sender: 'contact',
-                      status: 'DELIVERED',
-                      recipientId: 'user',
-                    }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
+                // Step 1: Check conversation ownership in kvStore
+                const owner = await getConversationOwner(normalizedPhone);
+                let handled = false;
+
+                if (owner && owner.workspaceId) {
+                  const owningConnector = workspaceRegistry.getConnector(owner.workspaceId);
+                  if (owningConnector) {
+                    console.log(`[webhook] Conversation for ${normalizedPhone} owned by workspace ${owner.workspaceId}. Writing to ${owner.workspaceId} ONLY.`);
+                    
+                    if (owner.workspaceId === 'salescloud-ws-1') {
+                      const scConn = owningConnector as any;
+                      const contact = await owningConnector.findContact({ phoneNumber: normalizedPhone });
+                      await scConn.saveInboundMessage({
+                        messageId,
+                        senderPhone: normalizedPhone,
+                        content: contentText,
+                        timestamp: msgIsoTimestamp,
+                        leadId: contact?.salesforceObjectType === 'Lead' ? contact.salesforceRecordId : undefined,
+                        contactId: contact?.salesforceObjectType === 'Contact' ? contact.salesforceRecordId : undefined,
+                      });
+                    } else if (owner.workspaceId === 'sfmc-ws-1') {
+                      await writeReceivedMessage({
+                        WaMid: messageId,
+                        Phone: normalizedPhone,
+                        ContactName: '',
+                        MessageType: message.type as string || 'text',
+                        MessageContent: contentText || '',
+                        ReceivedTime: msgIsoTimestamp,
+                      });
+                      emitRealtimeMessage(normalizedPhone, {
+                        id: messageId,
+                        content: contentText || '',
+                        timestamp: msgIsoTimestamp,
+                        sender: 'contact',
+                        status: 'DELIVERED',
+                        recipientId: 'user',
+                      }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
+                    }
+
+                    // Refresh ownership timestamp
+                    await setConversationOwner(normalizedPhone, owner.workspaceId, owner.assignedBy || 'outbound');
+                    handled = true;
                   } else {
-                    // ----- Step 3: Neither workspace configured — Unmatched Queue -----
-                    console.log(`[webhook] Phone ${normalizedPhone} matched neither workspace. Pushing to Unmatched Queue.`);
+                    console.warn(`[webhook] Owner workspace ${owner.workspaceId} no longer exists in registry. Falling through to lookup.`);
+                  }
+                }
+
+                // Step 2: No valid ownership record — perform read-only findContact lookup across registered connectors
+                if (!handled) {
+                  const allWorkspaces = workspaceRegistry.getAllWorkspaces();
+                  const matches: Array<{ workspaceId: string; connector: any; contact: any }> = [];
+
+                  for (const ws of allWorkspaces) {
+                    try {
+                      const contact = await ws.connector.findContact({ phoneNumber: normalizedPhone });
+                      if (contact) {
+                        matches.push({ workspaceId: ws.workspaceId, connector: ws.connector, contact });
+                      }
+                    } catch (err) {
+                      console.warn(`[webhook] findContact error for workspace ${ws.workspaceId}:`, err);
+                    }
+                  }
+
+                  console.log(`[webhook] Workspace matches for ${normalizedPhone}: ${matches.map(m => m.workspaceId).join(', ')}`);
+
+                  if (matches.length === 1) {
+                    const singleMatch = matches[0];
+                    console.log(`[webhook] Exactly 1 workspace match (${singleMatch.workspaceId}). Writing & setting ownership.`);
+
+                    if (singleMatch.workspaceId === 'salescloud-ws-1') {
+                      await singleMatch.connector.saveInboundMessage({
+                        messageId,
+                        senderPhone: normalizedPhone,
+                        content: contentText,
+                        timestamp: msgIsoTimestamp,
+                        leadId: singleMatch.contact?.salesforceObjectType === 'Lead' ? singleMatch.contact.salesforceRecordId : undefined,
+                        contactId: singleMatch.contact?.salesforceObjectType === 'Contact' ? singleMatch.contact.salesforceRecordId : undefined,
+                      });
+                    } else if (singleMatch.workspaceId === 'sfmc-ws-1') {
+                      await writeReceivedMessage({
+                        WaMid: messageId,
+                        Phone: normalizedPhone,
+                        ContactName: singleMatch.contact?.name || '',
+                        MessageType: message.type as string || 'text',
+                        MessageContent: contentText || '',
+                        ReceivedTime: msgIsoTimestamp,
+                      });
+                      emitRealtimeMessage(normalizedPhone, {
+                        id: messageId,
+                        content: contentText || '',
+                        timestamp: msgIsoTimestamp,
+                        sender: 'contact',
+                        status: 'DELIVERED',
+                        recipientId: 'user',
+                      }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
+                    }
+
+                    await setConversationOwner(normalizedPhone, singleMatch.workspaceId, 'inbound_match');
+                  } else if (matches.length > 1) {
+                    console.log(`[webhook] Ambiguous match (${matches.length} workspaces). Pushing to Ambiguous Queue.`);
                     await pushUnmatched({
                       id: messageId,
                       phoneNumber: normalizedPhone,
                       content: contentText,
                       timestamp: msgIsoTimestamp,
+                      status: 'ambiguous',
+                      candidateWorkspaces: matches.map(m => m.workspaceId),
+                      mediaType,
+                      mediaId,
+                      filename,
+                      rawPayload: message as Record<string, unknown>
+                    });
+                  } else {
+                    // matches.length === 0
+                    console.log(`[webhook] Zero workspace matches. Pushing to Unmatched Queue.`);
+                    await pushUnmatched({
+                      id: messageId,
+                      phoneNumber: normalizedPhone,
+                      content: contentText,
+                      timestamp: msgIsoTimestamp,
+                      status: 'unmatched',
                       mediaType,
                       mediaId,
                       filename,

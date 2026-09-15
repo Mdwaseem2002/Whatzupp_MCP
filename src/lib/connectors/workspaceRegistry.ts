@@ -27,6 +27,13 @@ class WorkspaceRegistry {
     return entry ? entry.connector : null;
   }
 
+  public getAllWorkspaces(): Array<{ workspaceId: string; connector: Connector }> {
+    return Array.from(this.registry.entries()).map(([workspaceId, config]) => ({
+      workspaceId,
+      connector: config.connector,
+    }));
+  }
+
   public validateWorkspaceKey(key: string): { workspaceId: string; connector: Connector } | null {
     if (!key) return null;
     for (const [workspaceId, config] of this.registry.entries()) {

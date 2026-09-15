@@ -4,6 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { writeSentMessage } from '@/lib/sfmcDE';
+import { setConversationOwner } from '@/lib/storage/kvStore';
 import { MessageStatus } from '@/types';
 
 interface SendWhatsAppPayload {
@@ -61,6 +62,19 @@ async function parseRequestBody(request: Request): Promise<Record<string, unknow
     console.error('[send-whatsapp] Body is neither valid JWT nor valid JSON. First 100 chars:', rawBody.slice(0, 100));
     throw new Error('Request body is not valid JSON or JWT');
   }
+}
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Workspace-Id, X-Workspace-Key, bypass-tunnel-reminder',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
 }
 
 export async function POST(request: Request) {
@@ -246,6 +260,7 @@ export async function POST(request: Request) {
             JourneyName: journeyName,
             Source: contactKey ? 'journey_builder' : 'manual_send',
           });
+          await setConversationOwner(normalizedPhone, 'sfmc-ws-1', 'outbound');
         } catch (sfmcError) {
           console.error('[send-whatsapp] SFMC DE write failed:', sfmcError);
         }

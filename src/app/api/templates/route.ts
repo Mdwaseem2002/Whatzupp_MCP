@@ -2,7 +2,7 @@
 // Fetches all APPROVED WhatsApp message templates from Meta
 // Used by Journey Builder activity UI dropdown & Salesforce LWC
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
@@ -32,11 +32,21 @@ interface MetaTemplatesResponse {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // ----- Env Vars -----
+    // ----- Env Vars & Header Override -----
     let accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
     let wabaId = process.env.WABA_ID;
+
+    // Check request headers or query params for custom token passed from LWC/Client
+    const authHeader = request.headers.get('authorization');
+    const paramToken = request.nextUrl.searchParams.get('accessToken');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7).trim();
+      if (token) accessToken = token;
+    } else if (paramToken) {
+      accessToken = paramToken.trim();
+    }
 
     // Dynamically read .env.local to get live tokens without server restart
     try {

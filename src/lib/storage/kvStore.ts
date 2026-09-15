@@ -4,16 +4,25 @@
 
 import fs from 'fs';
 import path from 'path';
+import { normalizePhoneNumber } from '@/utils/phone';
 
 export interface UnmatchedMessage {
   id: string;
   phoneNumber: string;
   content: string;
   timestamp: string;
+  status?: 'unmatched' | 'ambiguous';
+  candidateWorkspaces?: string[];
   mediaType?: string;
   mediaId?: string;
   filename?: string;
   rawPayload?: Record<string, unknown>;
+}
+
+export interface ConversationOwner {
+  workspaceId: string;
+  updatedAt: string;
+  assignedBy?: 'outbound' | 'inbound_match' | 'manual_assignment';
 }
 
 function ensureProductionConfigured() {
@@ -179,4 +188,29 @@ export async function setConfig(key: string, value: unknown): Promise<void> {
   devConfigStore[key] = value;
   const filePath = path.join(DATA_DIR, 'app_config.json');
   fs.writeFileSync(filePath, JSON.stringify(devConfigStore, null, 2), 'utf8');
+}
+
+export async function getConversationOwner(phone: string): Promise<ConversationOwner | null> {
+  const norm = normalizePhoneNumber(phone);
+  if (!norm) return null;
+  const data = await getConfig(`conversation_owner:${norm}`);
+  if (data && typeof data === 'object' && 'workspaceId' in data) {
+    return data as ConversationOwner;
+  }
+  return null;
+}
+
+export async function setConversationOwner(
+  phone: string,
+  workspaceId: string,
+  assignedBy: 'outbound' | 'inbound_match' | 'manual_assignment' = 'outbound'
+): Promise<void> {
+  const norm = normalizePhoneNumber(phone);
+  if (!norm || !workspaceId) return;
+  const record: ConversationOwner = {
+    workspaceId,
+    updatedAt: new Date().toISOString(),
+    assignedBy,
+  };
+  await setConfig(`conversation_owner:${norm}`, record);
 }

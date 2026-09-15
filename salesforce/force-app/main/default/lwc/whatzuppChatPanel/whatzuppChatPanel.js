@@ -2,6 +2,12 @@ import { LightningElement, api, track, wire } from 'lwc';
 import { getRecord, getFieldValue } from 'lightning/uiRecordApi';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 
+// ─── Apex Controller Methods ───
+import getMessages from '@salesforce/apex/WhatzuppChatController.getMessages';
+import getMessagesByPhone from '@salesforce/apex/WhatzuppChatController.getMessagesByPhone';
+import createOutboundMessage from '@salesforce/apex/WhatzuppChatController.createOutboundMessage';
+
+// ─── Schema Imports ───
 import LEAD_PHONE from '@salesforce/schema/Lead.Phone';
 import LEAD_MOBILE from '@salesforce/schema/Lead.MobilePhone';
 import LEAD_NAME from '@salesforce/schema/Lead.Name';
@@ -11,7 +17,9 @@ import CONTACT_NAME from '@salesforce/schema/Contact.Name';
 import ACCOUNT_PHONE from '@salesforce/schema/Account.Phone';
 import ACCOUNT_NAME from '@salesforce/schema/Account.Name';
 
-const DEFAULT_HTTPS_APP_URL = 'https://odd-news-invite.loca.lt';
+// ─── Vercel API URL (used ONLY for sending — never for reading) ───
+const DEFAULT_HTTPS_APP_URL = 'https://whatzupp-mcp.vercel.app';
+
 
 // ─── Emoji Data — categorised common emojis ───
 const EMOJI_CATEGORIES = [
@@ -29,7 +37,7 @@ const EMOJI_CATEGORIES = [
     },
     {
         name: 'Objects', icon: '📱',
-        emojis: ['📱','💻','⌨️','🖥️','🖨️','📷','📹','📞','☎️','📺','📻','🎙️','⏰','⌚','📡','🔋','💡','flashlight','💵','💰','💳','✉️','📧','📦','📋','📝','✏️','📌','📎','🔑','🔒']
+        emojis: ['📱','💻','⌨️','🖥️','🖨️','📷','📹','📞','☎️','📺','📻','🎙️','⏰','⌚','📡','🔋','💡','💵','💰','💳','✉️','📧','📦','📋','📝','✏️','📌','📎','🔑','🔒']
     },
     {
         name: 'Symbols', icon: '✅',
@@ -42,7 +50,7 @@ export default class WhatzuppChatPanel extends LightningElement {
     @api objectApiName;
 
     @track messages = [];
-    @track contactPhone = '9952374972';
+    @track contactPhone = '';
     @track contactName = '';
     @track newMessageText = '';
     @track isLoading = false;
@@ -72,6 +80,9 @@ export default class WhatzuppChatPanel extends LightningElement {
     @track isUploading = false;
     @track uploadFileName = '';
 
+    // ─── Apex polling timer ───
+    _pollTimer = null;
+
     get recordFields() {
         if (this.objectApiName === 'Lead') return [LEAD_PHONE, LEAD_MOBILE, LEAD_NAME];
         if (this.objectApiName === 'Contact') return [CONTACT_PHONE, CONTACT_MOBILE, CONTACT_NAME];
@@ -88,7 +99,7 @@ export default class WhatzuppChatPanel extends LightningElement {
                           getFieldValue(data, CONTACT_MOBILE) || 
                           getFieldValue(data, ACCOUNT_PHONE);
             if (phone) {
-                this.contactPhone = phone;
+                this.contactPhone = phone.replace(/[^0-9]/g, '');
             }
             const name = getFieldValue(data, LEAD_NAME) || 
                          getFieldValue(data, CONTACT_NAME) || 
@@ -96,32 +107,37 @@ export default class WhatzuppChatPanel extends LightningElement {
             if (name) {
                 this.contactName = name;
             }
-            this.fetchMessages();
+            // Load messages from Salesforce via Apex
+            this.loadMessagesFromApex();
+        }
+        if (error) {
+            console.error('[WhatzuppChat] Error loading record:', error);
         }
     }
 
     connectedCallback() {
+        // Set Vercel URL and load cached token
+        this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
         try {
-            const saved = localStorage.getItem('whatzupp_app_url');
-            if (saved && !saved.startsWith('http://localhost') && !saved.includes('vercel.app')) {
-                this.settingsAppUrl = saved;
-            } else {
-                this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
-                localStorage.setItem('whatzupp_app_url', DEFAULT_HTTPS_APP_URL);
-            }
+            const savedUrl = localStorage.getItem('whatzupp_app_url');
+            if (savedUrl) this.settingsAppUrl = savedUrl;
+            const savedToken = localStorage.getItem('whatzupp_access_token');
+            if (savedToken) this.settingsAccessToken = savedToken;
         } catch (e) {
-            this.settingsAppUrl = DEFAULT_HTTPS_APP_URL;
+            // localStorage may not be available
         }
 
+        // Load messages if recordId is already available
         if (this.recordId) {
-            this.fetchMessages();
+            this.loadMessagesFromApex();
         }
 
-        // Auto-poll for incoming WhatsApp replies every 5 seconds
+        // Poll for new messages via Apex every 5 seconds
+        // (Platform Events would be ideal but the org hit its custom object limit)
         // eslint-disable-next-line @lwc/lwc/no-async-operation
         this._pollTimer = setInterval(() => {
-            if (this.contactPhone && !this.isSending) {
-                this.fetchMessagesSilently();
+            if (this.contactPhone && !this.isSending && !this.isLoading) {
+                this._pollMessagesFromApex();
             }
         }, 5000);
     }
@@ -132,8 +148,45 @@ export default class WhatzuppChatPanel extends LightningElement {
         }
     }
 
+    // ════════════════════════════════════════
+    // ─── APEX POLLING (silent refresh) ───
+    // ════════════════════════════════════════
+
+    async _pollMessagesFromApex() {
+        try {
+            let records = [];
+            if (this.recordId && this.objectApiName) {
+                records = await getMessages({
+                    recordId: this.recordId,
+                    objectApiName: this.objectApiName
+                });
+            }
+            if ((!records || records.length === 0) && this.contactPhone) {
+                const cleanPhone = this.contactPhone.replace(/[^0-9]/g, '');
+                records = await getMessagesByPhone({ phone: cleanPhone });
+            }
+
+            if (records && records.length > 0) {
+                const formatted = records.map(r => this._formatMessageItem(r));
+                // Only update if message count changed (to avoid unnecessary re-renders)
+                const lastOld = this.messages.length > 0 ? this.messages[this.messages.length - 1].id : null;
+                const lastNew = formatted.length > 0 ? formatted[formatted.length - 1].id : null;
+                if (formatted.length !== this.messages.length || lastOld !== lastNew) {
+                    this.messages = formatted;
+                    this.scrollToBottom();
+                }
+            }
+        } catch (e) {
+            // Silent catch — don't show errors for background polling
+        }
+    }
+
+    // ════════════════════════════════════════
+    // ─── GETTERS ───
+    // ════════════════════════════════════════
+
     get headerTitle() {
-        if (this.contactName) {
+        if (this.contactName && this.contactPhone) {
             return `${this.contactName} (${this.contactPhone})`;
         }
         return this.contactPhone || 'WhatsApp Chat';
@@ -194,11 +247,17 @@ export default class WhatzuppChatPanel extends LightningElement {
     }
 
     // ════════════════════════════════════════
-    // ─── MESSAGES ───
+    // ─── MESSAGES (Apex-based) ───
     // ════════════════════════════════════════
 
     _formatMessageItem(m) {
-        const contentText = m.content || '';
+        // Handle both Apex record format (field API names) and plain object format
+        const contentText = m.Content__c || m.content || '';
+        const direction = m.Direction__c || m.direction || 'INBOUND';
+        const timestamp = m.Timestamp__c || m.timestamp || new Date().toISOString();
+        const messageId = m.Message_Id__c || m.Id || m.id || ('msg-' + Date.now());
+        const status = m.Status__c || m.status || 'SENT';
+
         const matchMedia = contentText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i) || contentText.match(/\[(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i);
         let mediaType = m.mediaType;
         if (!mediaType || mediaType === 'text') {
@@ -213,7 +272,6 @@ export default class WhatzuppChatPanel extends LightningElement {
 
         const extractedMediaId = m.mediaId || (matchMedia ? matchMedia[2] : null);
 
-        // Fallback preview images/videos if no live binary mediaId is present
         const fallbackImgSrc = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80';
         const fallbackVideoPoster = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?w=600&auto=format&fit=crop&q=80';
 
@@ -236,12 +294,17 @@ export default class WhatzuppChatPanel extends LightningElement {
         const isText = !isImage && !isVideo && !isDocument;
 
         const fileName = m.filename || (matchMedia && matchMedia[1] ? `${matchMedia[1]}.dat` : 'Document Attachment');
-        const isOutbound = m.direction === 'OUTBOUND' || m.sender === 'user';
-        const formattedTime = new Date(m.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const isOutbound = direction === 'OUTBOUND';
+        const formattedTime = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         return {
-            ...m,
+            id: messageId,
+            content: contentText,
+            displayContent,
             formattedTime,
+            timestamp,
+            direction,
+            status,
             isOutbound,
             bubbleClass: `msg-bubble ${isOutbound ? 'msg-outbound' : 'msg-inbound'}`,
             isImage,
@@ -249,91 +312,62 @@ export default class WhatzuppChatPanel extends LightningElement {
             isDocument,
             isText,
             hasText,
-            displayContent,
             mediaUrl,
             fileName,
         };
     }
 
-    async fetchMessages() {
+    /**
+     * Load messages from Salesforce via Apex controller.
+     * Primary method: query by recordId (Lead__c / Contact__c / Account__c).
+     * Fallback: query by phone number if no record relationship found.
+     */
+    async loadMessagesFromApex() {
         this.isLoading = true;
         try {
-            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages?workspaceId=salescloud-ws-1`;
-            const res = await fetch(endpoint, {
-                headers: this._getHeaders({ 'X-Workspace-Id': 'salescloud-ws-1' })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                const msgs = data.messages || data || [];
-                this.messages = (Array.isArray(msgs) ? msgs : []).map(m => this._formatMessageItem(m));
-            } else {
-                this._useFallbackMessages();
+            let records = [];
+
+            // Primary: query by record relationship
+            if (this.recordId && this.objectApiName) {
+                records = await getMessages({ 
+                    recordId: this.recordId, 
+                    objectApiName: this.objectApiName 
+                });
             }
-        } catch (e) {
-            console.warn('Using local workspace chat state', e);
-            this._useFallbackMessages();
+
+            // Fallback: if no records found by relationship, try by phone
+            if ((!records || records.length === 0) && this.contactPhone) {
+                const cleanPhone = this.contactPhone.replace(/[^0-9]/g, '');
+                records = await getMessagesByPhone({ phone: cleanPhone });
+            }
+
+            if (records && records.length > 0) {
+                this.messages = records.map(r => this._formatMessageItem(r));
+            } else {
+                // No messages found — show empty state (never dummy data)
+                this.messages = [];
+            }
+        } catch (error) {
+            console.error('[WhatzuppChat] Apex getMessages error:', error);
+            this.messages = [];
+            this.showToast('Error', 'Failed to load messages: ' + (error.body?.message || error.message || 'Unknown error'), 'error');
         } finally {
             this.isLoading = false;
             this.scrollToBottom();
         }
     }
 
-    async fetchMessagesSilently() {
-        if (!this.contactPhone) return;
-        try {
-            const endpoint = `${this.appBaseUrl}/api/conversations/${this.contactPhone}/messages?workspaceId=salescloud-ws-1`;
-            const res = await fetch(endpoint, {
-                headers: this._getHeaders({ 'X-Workspace-Id': 'salescloud-ws-1' })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                const msgs = data.messages || data || [];
-                const formatted = (Array.isArray(msgs) ? msgs : []).map(m => this._formatMessageItem(m));
-
-                const lastOld = this.messages.length > 0 ? this.messages[this.messages.length - 1].id : null;
-                const lastNew = formatted.length > 0 ? formatted[formatted.length - 1].id : null;
-
-                if (formatted.length !== this.messages.length || lastOld !== lastNew) {
-                    this.messages = formatted;
-                    this.scrollToBottom();
-                }
-            }
-        } catch (e) {
-            // silent catch
-        }
-    }
-
-    _useFallbackMessages() {
-        if (this.messages.length === 0) {
-            this.messages = [
-                {
-                    id: 'm1',
-                    content: 'Hello! Thank you for contacting Pentacloud Consulting via WhatZupp.',
-                    timestamp: new Date().toISOString(),
-                    formattedTime: '10:30 AM',
-                    direction: 'OUTBOUND',
-                    isOutbound: true,
-                    bubbleClass: 'msg-bubble msg-outbound'
-                },
-                {
-                    id: 'm2',
-                    content: 'Hi! Could you please send me more details?',
-                    timestamp: new Date().toISOString(),
-                    formattedTime: '10:32 AM',
-                    direction: 'INBOUND',
-                    isOutbound: false,
-                    bubbleClass: 'msg-bubble msg-inbound'
-                }
-            ];
-        }
-    }
+    // ════════════════════════════════════════
+    // ─── SEND MESSAGE ───
+    // ════════════════════════════════════════
 
     handleInputChange(event) {
         this.newMessageText = event.target.value;
     }
 
     handleKeyUp(event) {
-        if (event.keyCode === 13) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
             this.handleSend();
         }
     }
@@ -345,22 +379,33 @@ export default class WhatzuppChatPanel extends LightningElement {
         this.newMessageText = '';
         this.isSending = true;
 
+        // Optimistic UI: show message immediately
+        const tempId = 'temp-' + Date.now();
         const newMsg = {
-            id: 'temp-' + Date.now(),
+            id: tempId,
             content: textToSend,
+            displayContent: textToSend,
             timestamp: new Date().toISOString(),
             formattedTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             direction: 'OUTBOUND',
             isOutbound: true,
+            isText: true,
+            hasText: true,
+            isImage: false,
+            isVideo: false,
+            isDocument: false,
             bubbleClass: 'msg-bubble msg-outbound'
         };
 
         this.messages = [...this.messages, newMsg];
         this.scrollToBottom();
 
+        let wamid = null;
+
         try {
+            // Step 1: Send via Vercel → WhatsApp Meta API
             const endpoint = `${this.appBaseUrl}/api/send-message`;
-            await fetch(endpoint, {
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
                 body: JSON.stringify({
@@ -371,15 +416,38 @@ export default class WhatzuppChatPanel extends LightningElement {
                     salesforceObjectType: this.objectApiName
                 })
             });
+
+            if (res.ok) {
+                const data = await res.json();
+                wamid = data?.data?.messages?.[0]?.id || null;
+            }
         } catch (e) {
-            console.log('WhatsApp message dispatched:', textToSend);
+            console.warn('[WhatzuppChat] Vercel send failed (message may still be queued):', e);
+        }
+
+        try {
+            // Step 2: Create/Upsert record in Salesforce via Apex (guaranteed persistence)
+            const messageId = wamid || ('lwc-' + Date.now());
+            await createOutboundMessage({
+                phone: this.contactPhone,
+                content: textToSend,
+                messageId: messageId,
+                recordId: this.recordId,
+                objectApiName: this.objectApiName
+            });
+
+            // Refresh from Salesforce to get the real record
+            await this.loadMessagesFromApex();
+        } catch (apexError) {
+            console.error('[WhatzuppChat] Apex createOutboundMessage failed:', apexError);
+            this.showToast('Warning', 'Message sent to WhatsApp but Salesforce record creation failed.', 'warning');
         } finally {
             this.isSending = false;
         }
     }
 
     handleRefresh() {
-        this.fetchMessages();
+        this.loadMessagesFromApex();
         if (this.showTemplates) {
             this.fetchTemplates();
         }
@@ -450,6 +518,9 @@ export default class WhatzuppChatPanel extends LightningElement {
 
         try {
             localStorage.setItem('whatzupp_app_url', cleanedUrl);
+            if (this.settingsAccessToken) {
+                localStorage.setItem('whatzupp_access_token', this.settingsAccessToken.trim());
+            }
         } catch (e) { /* ignore */ }
 
         let saveSuccess = false;
@@ -534,51 +605,29 @@ export default class WhatzuppChatPanel extends LightningElement {
         this.templatesError = '';
         try {
             const endpoint = `${this.appBaseUrl}/api/templates`;
-            console.log('Fetching templates from:', endpoint);
-
             const res = await fetch(endpoint, {
                 headers: this._getHeaders()
             });
-
-            const data = await res.json().catch(() => null);
-
-            if (res.ok && data && data.success && Array.isArray(data.templates)) {
-                this.templates = data.templates.map(t => ({
+            if (!res.ok) {
+                throw new Error(`Templates HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            const rawTemplates = data.templates || data.data || [];
+            this.templates = rawTemplates.map(t => {
+                const bodyComp = (t.components || []).find(c => c.type === 'BODY');
+                return {
                     ...t,
-                    bodyPreview: this._getTemplateBodyPreview(t),
-                    categoryClass: this._getTemplateCategoryClass(t.category),
-                    isSelected: false
-                }));
-            } else {
-                const errMsg = (data && data.error) || `HTTP ${res.status}`;
-                throw new Error(errMsg);
-            }
+                    bodyPreview: bodyComp ? bodyComp.text.slice(0, 120) + (bodyComp.text.length > 120 ? '...' : '') : 'No body text',
+                    categoryClass: `template-category cat-${(t.category || 'UTILITY').toLowerCase()}`,
+                    isSelected: false,
+                };
+            });
         } catch (e) {
-            console.error('Failed to fetch templates:', e);
-            if (e.message && e.message.includes('OAuthException')) {
-                this.templatesError = 'Meta Session Expired: Your Meta Access Token has expired. Please click ⚙️ Settings and paste your fresh Meta Access Token.';
-            } else if (e.message && e.message.includes('Failed to fetch')) {
-                this.templatesError = `Network Error: Could not reach server at ${this.appBaseUrl}. Please check your App URL in Settings ⚙️.`;
-            } else {
-                this.templatesError = e.message || 'Failed to load templates from Meta';
-            }
+            console.error('Template fetch error:', e);
+            this.templatesError = e.message || 'Failed to load templates';
         } finally {
             this.templatesLoading = false;
         }
-    }
-
-    _getTemplateBodyPreview(template) {
-        const body = template.components?.find(c => c.type === 'BODY');
-        if (!body || !body.text) return 'No body text';
-        return body.text.length > 80 ? body.text.substring(0, 77) + '...' : body.text;
-    }
-
-    _getTemplateCategoryClass(category) {
-        const cat = category?.toUpperCase();
-        if (cat === 'UTILITY') return 'template-cat template-cat-utility';
-        if (cat === 'MARKETING') return 'template-cat template-cat-marketing';
-        if (cat === 'AUTHENTICATION') return 'template-cat template-cat-auth';
-        return 'template-cat';
     }
 
     handleSelectTemplate(event) {
@@ -597,21 +646,31 @@ export default class WhatzuppChatPanel extends LightningElement {
         const tpl = this.selectedTemplate;
 
         const bodyText = this.selectedTemplateBody || `[Template: ${tpl.name}]`;
+        const displayText = `📋 ${bodyText}`;
         const newMsg = {
             id: 'tpl-' + Date.now(),
-            content: `📋 ${bodyText}`,
+            content: displayText,
+            displayContent: displayText,
             timestamp: new Date().toISOString(),
             formattedTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             direction: 'OUTBOUND',
             isOutbound: true,
+            isText: true,
+            hasText: true,
+            isImage: false,
+            isVideo: false,
+            isDocument: false,
             bubbleClass: 'msg-bubble msg-outbound'
         };
         this.messages = [...this.messages, newMsg];
         this.scrollToBottom();
 
+        let wamid = null;
+
         try {
+            // Step 1: Send template via Vercel → WhatsApp Meta API
             const endpoint = `${this.appBaseUrl}/api/send-whatsapp`;
-            await fetch(endpoint, {
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
                 body: JSON.stringify({
@@ -624,8 +683,31 @@ export default class WhatzuppChatPanel extends LightningElement {
                     salesforceObjectType: this.objectApiName
                 })
             });
+
+            if (res.ok) {
+                const data = await res.json();
+                wamid = data?.data?.messages?.[0]?.id || data?.messageId || null;
+            }
         } catch (e) {
             console.error('Template send error:', e);
+        }
+
+        try {
+            // Step 2: Create/Upsert record in Salesforce via Apex
+            const messageId = wamid || ('tpl-lwc-' + Date.now());
+            const templateContent = `[Template: ${tpl.name}] ${bodyText}`;
+            await createOutboundMessage({
+                phone: this.contactPhone,
+                content: templateContent,
+                messageId: messageId,
+                recordId: this.recordId,
+                objectApiName: this.objectApiName
+            });
+
+            // Refresh from Salesforce
+            await this.loadMessagesFromApex();
+        } catch (apexError) {
+            console.error('[WhatzuppChat] Apex createOutboundMessage (template) failed:', apexError);
         } finally {
             this.isSending = false;
             this.showTemplates = false;
@@ -702,10 +784,11 @@ export default class WhatzuppChatPanel extends LightningElement {
 
             await fetch(`${this.appBaseUrl}/api/send-message`, {
                 method: 'POST',
-                headers: this._getHeaders({ 'Content-Type': 'application/json' }),
+                headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
                 body: JSON.stringify({
                     to: this.contactPhone,
                     message: '',
+                    workspaceId: 'salescloud-ws-1',
                     mediaId: uploadData.id,
                     mediaType: mediaType,
                     mimeType: file.type,

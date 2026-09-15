@@ -3,7 +3,7 @@
 // Bypasses workspace-specific middleware dynamic routing
 
 import { NextResponse } from 'next/server';
-import { getUnmatchedQueue, removeUnmatched } from '@/lib/storage/kvStore';
+import { getUnmatchedQueue, removeUnmatched, setConversationOwner } from '@/lib/storage/kvStore';
 import { SalesCloudConnector } from '@/lib/connectors/salesCloudConnector';
 import { SFMCConnector } from '@/lib/connectors/sfmcConnector';
 import { writeReceivedMessage } from '@/lib/sfmcDE';
@@ -82,7 +82,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // ----- Delete from Unmatched Queue after Successful Write-Through -----
+    // ----- Set Conversation Ownership on Assignment -----
+    await setConversationOwner(targetMsg.phoneNumber, targetWorkspaceId, 'manual_assignment');
+
+    // ----- Delete from Queue after Successful Write-Through & Ownership Setting -----
     await removeUnmatched(messageId);
 
     return NextResponse.json({
