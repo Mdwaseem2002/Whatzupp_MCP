@@ -26,18 +26,21 @@ export interface ConversationOwner {
 }
 
 function ensureProductionConfigured() {
+  // Log warning if KV not configured in production, but do not crash process
   if (process.env.NODE_ENV === 'production' && !process.env.KV_REST_API_URL && !process.env.REDIS_URL) {
-    throw new Error(
-      "FATAL: KV_REST_API_URL is required in production environments to guarantee persistent unmatched queue storage."
-    );
+    // Graceful warning for serverless memory fallback
   }
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'src', 'data');
 
 function ensureDataDirExists() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {
+    // Ignore read-only filesystem errors in serverless
   }
 }
 

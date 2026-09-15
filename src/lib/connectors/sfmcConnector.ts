@@ -14,17 +14,8 @@ export class SFMCConnector implements Connector {
     const sfmcRestBaseUri = process.env.SFMC_REST_BASE_URI;
 
     if (!sfmcRestBaseUri) {
-      // Graceful fallback when SFMC credentials not configured
-      return [
-        {
-          id: 'sfmc-c-1',
-          name: 'Waseem (SFMC)',
-          phoneNumber: '9952374972',
-          email: 'waseem.sfmc@example.com',
-          company: 'SFMC Marketing Cloud',
-          lastSyncedAt: new Date().toISOString(),
-        },
-      ];
+      // Return empty array when SFMC credentials are not configured
+      return [];
     }
 
     try {
@@ -68,17 +59,8 @@ export class SFMCConnector implements Connector {
 
       return results;
     } catch (err) {
-      console.warn('[SFMCConnector] Error fetching contacts, falling back:', err);
-      return [
-        {
-          id: 'sfmc-c-1',
-          name: 'Waseem (SFMC)',
-          phoneNumber: '9952374972',
-          email: 'waseem.sfmc@example.com',
-          company: 'SFMC Marketing Cloud',
-          lastSyncedAt: new Date().toISOString(),
-        },
-      ];
+      console.warn('[SFMCConnector] Error fetching contacts from SFMC:', err);
+      return [];
     }
   }
 
