@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 next dev",
-    "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 next build",
+    "build": "prisma generate && cross-env NODE_OPTIONS=--max-old-space-size=4096 next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "test:isolation": "npx tsx src/__tests__/workspaceIsolation.test.ts"
