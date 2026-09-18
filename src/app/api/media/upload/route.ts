@@ -6,6 +6,19 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Workspace-Id, X-Workspace-Key, bypass-tunnel-reminder',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -37,7 +50,10 @@ export async function POST(request: Request) {
     }
 
     if (!file || !accessToken || !phoneNumberId) {
-      return NextResponse.json({ error: 'Missing required fields or WhatsApp credentials' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Missing required fields or WhatsApp credentials' },
+        { status: 400, headers: corsHeaders }
+      );
     }
 
     // Prepare FormData for Meta Graph API
@@ -65,14 +81,21 @@ export async function POST(request: Request) {
         ? 'Meta Session Expired: Your Meta Access Token has expired. Please click ⚙️ Settings and update your fresh Meta Access Token.'
         : errorData?.error?.message || 'Failed to upload media to Meta';
 
-      return NextResponse.json({ error: errorMsg, details: errorData }, { status: metaResponse.status });
+      return NextResponse.json(
+        { error: errorMsg, details: errorData },
+        { status: metaResponse.status, headers: corsHeaders }
+      );
     }
 
     const data = await metaResponse.json();
-    return NextResponse.json({ success: true, id: data.id });
+    return NextResponse.json({ success: true, id: data.id }, { headers: corsHeaders });
     
   } catch (error: any) {
     console.error('[Media Upload] Internal Server Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || 'Internal Server Error' },
+      { status: 500, headers: corsHeaders }
+    );
   }
 }
+

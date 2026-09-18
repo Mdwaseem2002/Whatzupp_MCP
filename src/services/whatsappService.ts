@@ -138,13 +138,16 @@ export function getWhatsAppService(accessToken: string, phoneNumberId: string): 
 }
 
 /**
- * Helper function to send a WhatsApp message using configured env variables or parameters
+ * Helper function to send a WhatsApp message (text or media) using configured env variables or parameters
  */
 export async function sendWhatsAppMessage(params: {
   to: string;
-  message: string;
+  message?: string;
   accessToken?: string;
   phoneNumberId?: string;
+  mediaId?: string;
+  mediaType?: string;
+  filename?: string;
 }): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const token = params.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || process.env.NEXT_PUBLIC_WHATSAPP_ACCESS_TOKEN || '';
@@ -155,9 +158,46 @@ export async function sendWhatsAppMessage(params: {
       return { success: true, messageId: `wamid.mock.${Date.now()}` };
     }
 
-    const service = getWhatsAppService(token, phoneId);
-    const result = await service.sendTextMessage(params.to, params.message);
-    const waId = result.messages?.[0]?.id || `wamid.meta.${Date.now()}`;
+    const formattedPhone = params.to.replace(/\D/g, '');
+
+    const payload: any = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: formattedPhone,
+    };
+
+    if (params.mediaId && params.mediaType) {
+      const type = params.mediaType.toLowerCase();
+      payload.type = type;
+      payload[type] = { id: params.mediaId };
+      if (params.message) {
+        payload[type].caption = params.message;
+      }
+      if (params.filename && type === 'document') {
+        payload[type].filename = params.filename;
+      }
+    } else {
+      payload.type = 'text';
+      payload.text = { preview_url: false, body: params.message || '' };
+    }
+
+    const response = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('[WhatsApp Service] Meta API error:', JSON.stringify(errorData));
+      throw new Error(`WhatsApp API error (${response.status}): ${JSON.stringify(errorData)}`);
+    }
+
+    const data = await response.json();
+    const waId = data.messages?.[0]?.id || `wamid.meta.${Date.now()}`;
     return { success: true, messageId: waId };
   } catch (error: any) {
     console.error('[WhatsApp Service] Error sending message:', error);

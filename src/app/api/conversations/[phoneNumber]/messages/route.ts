@@ -32,34 +32,36 @@ export async function GET(
       );
     }
 
-    const cleanPhone = rawPhone.replace(/^\+/, '').trim();
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '').trim();
     const page = await connector.fetchMessages({ phoneNumber: cleanPhone });
 
-    const formattedMessages = page.messages.map((m: any) => {
-      let mediaType = m.mediaType;
-      const content = m.content || '';
-      if (!mediaType) {
-        const match = content.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || content.match(/^\[(image|video|document|audio)\]/i);
-        if (match) {
-          mediaType = match[1].toLowerCase();
+    const formattedMessages = page.messages
+      .filter((m: any) => m.content && !m.content.includes('formatted phone') && !m.content.includes('Outbound from Sales Cloud'))
+      .map((m: any) => {
+        let mediaType = m.mediaType;
+        const content = m.content || '';
+        if (!mediaType) {
+          const match = content.match(/^\[(?:Media:\s*)?(image|video|document|audio)\]/i) || content.match(/^\[(image|video|document|audio)\]/i);
+          if (match) {
+            mediaType = match[1].toLowerCase();
+          }
         }
-      }
-      const mediaId = m.mediaId;
-      const mediaUrl = m.mediaUrl || (mediaId ? `/api/media?mediaId=${mediaId}` : undefined);
+        const mediaId = m.mediaId;
+        const mediaUrl = m.mediaUrl || (mediaId ? `/api/media?mediaId=${mediaId}` : undefined);
 
-      return {
-        id: m.id,
-        content: m.content,
-        timestamp: m.timestamp,
-        sender: m.direction === 'OUTBOUND' ? 'user' : 'contact',
-        direction: m.direction,
-        status: m.status,
-        salesforceRecordId: m.salesforceRecordId,
-        mediaType,
-        mediaId,
-        mediaUrl,
-      };
-    });
+        return {
+          id: m.id,
+          content: m.content,
+          timestamp: m.timestamp,
+          sender: m.direction === 'OUTBOUND' ? 'user' : 'contact',
+          direction: m.direction,
+          status: m.status,
+          salesforceRecordId: m.salesforceRecordId,
+          mediaType,
+          mediaId,
+          mediaUrl,
+        };
+      });
 
     return NextResponse.json({
       success: true,

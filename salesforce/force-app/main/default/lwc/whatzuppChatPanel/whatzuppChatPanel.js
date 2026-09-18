@@ -80,6 +80,13 @@ export default class WhatzuppChatPanel extends LightningElement {
     @track isUploading = false;
     @track uploadFileName = '';
 
+    // ─── Fast Replies state ───
+    @track showFastReplies = false;
+    @track fastReplies = [];
+    @track isAddingFastReply = false;
+    @track newFastReplyShortcut = '';
+    @track newFastReplyMessage = '';
+
     // ─── Apex polling timer ───
     _pollTimer = null;
 
@@ -123,6 +130,12 @@ export default class WhatzuppChatPanel extends LightningElement {
             if (savedUrl) this.settingsAppUrl = savedUrl;
             const savedToken = localStorage.getItem('whatzupp_access_token');
             if (savedToken) this.settingsAccessToken = savedToken;
+            
+            // Load fast replies
+            const savedReplies = localStorage.getItem('whatzupp_fast_replies');
+            if (savedReplies) {
+                this.fastReplies = JSON.parse(savedReplies);
+            }
         } catch (e) {
             // localStorage may not be available
         }
@@ -196,6 +209,10 @@ export default class WhatzuppChatPanel extends LightningElement {
         return this.messages && this.messages.length > 0;
     }
 
+    get hasFastReplies() {
+        return this.fastReplies && this.fastReplies.length > 0;
+    }
+
     get appBaseUrl() {
         let url = (this.settingsAppUrl || DEFAULT_HTTPS_APP_URL).trim();
         if (typeof window !== 'undefined' && window.location.protocol === 'https:' && url.startsWith('http://localhost')) {
@@ -258,7 +275,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         const messageId = m.Message_Id__c || m.Id || m.id || ('msg-' + Date.now());
         const status = m.Status__c || m.status || 'SENT';
 
-        const matchMedia = contentText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i) || contentText.match(/\[(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i);
+        const matchMedia = contentText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^:\s\]]+))?(?::\s*([^\s\]]+))?\]/i) || contentText.match(/\[(image|video|document|audio)(?::\s*([^:\s\]]+))?(?::\s*([^\s\]]+))?\]/i);
         let mediaType = m.mediaType;
         if (!mediaType || mediaType === 'text') {
             if (matchMedia) {
@@ -288,12 +305,21 @@ export default class WhatzuppChatPanel extends LightningElement {
 
         let displayContent = contentText;
         if (matchMedia) {
-            displayContent = contentText.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]\s*/i, '').trim();
+            displayContent = contentText.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?(?::\s*[^\s\]]+)?\]\s*/i, '').trim();
         }
-        const hasText = displayContent.length > 0 && !displayContent.startsWith('[Media:');
+
+        let extractedFileName = m.filename || m.fileName;
+        if (!extractedFileName && matchMedia && matchMedia[3]) {
+            extractedFileName = matchMedia[3];
+        }
+        if (!extractedFileName && isDocument && displayContent && !displayContent.startsWith('[')) {
+            extractedFileName = displayContent;
+        }
+        const fileName = extractedFileName || (isDocument ? 'Document Attachment.pdf' : 'Attachment');
+
+        const hasText = displayContent.length > 0 && !displayContent.startsWith('[Media:') && (!isDocument || displayContent !== fileName);
         const isText = !isImage && !isVideo && !isDocument;
 
-        const fileName = m.filename || (matchMedia && matchMedia[1] ? `${matchMedia[1]}.dat` : 'Document Attachment');
         const isOutbound = direction === 'OUTBOUND';
         const formattedTime = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -472,6 +498,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         if (this.showSettings) {
             this.showTemplates = false;
             this.showEmoji = false;
+            this.showFastReplies = false;
             this.loadSettingsFromServer();
         }
     }
@@ -586,6 +613,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         if (this.showTemplates) {
             this.showEmoji = false;
             this.showSettings = false;
+            this.showFastReplies = false;
             this.fetchTemplates();
         }
     }
@@ -724,6 +752,7 @@ export default class WhatzuppChatPanel extends LightningElement {
         if (this.showEmoji) {
             this.showTemplates = false;
             this.showSettings = false;
+            this.showFastReplies = false;
         }
     }
 
@@ -733,7 +762,9 @@ export default class WhatzuppChatPanel extends LightningElement {
 
     handleEmojiSelect(event) {
         const emoji = event.currentTarget.dataset.emoji;
-        this.newMessageText = (this.newMessageText || '') + emoji;
+        if (emoji) {
+            this.newMessageText = (this.newMessageText || '') + emoji;
+        }
     }
 
     handleCloseEmoji() {
@@ -741,7 +772,77 @@ export default class WhatzuppChatPanel extends LightningElement {
     }
 
     // ════════════════════════════════════════
-    // ─── FILE ATTACHMENT ───
+    // ─── FAST REPLIES ───
+    // ════════════════════════════════════════
+
+    handleToggleFastReplies() {
+        this.showFastReplies = !this.showFastReplies;
+        if (this.showFastReplies) {
+            this.showEmoji = false;
+            this.showTemplates = false;
+            this.showSettings = false;
+        }
+    }
+
+    handleCloseFastReplies() {
+        this.showFastReplies = false;
+        this.isAddingFastReply = false;
+    }
+
+    openAddFastReply() {
+        this.isAddingFastReply = true;
+        this.newFastReplyShortcut = '';
+        this.newFastReplyMessage = '';
+    }
+
+    cancelAddFastReply() {
+        this.isAddingFastReply = false;
+    }
+
+    handleNewShortcutChange(event) {
+        this.newFastReplyShortcut = event.target.value;
+    }
+
+    handleNewMessageChange(event) {
+        this.newFastReplyMessage = event.target.value;
+    }
+
+    saveFastReply() {
+        if (!this.newFastReplyMessage) {
+            this.showToast('Error', 'Message cannot be empty', 'error');
+            return;
+        }
+        
+        let shortcut = this.newFastReplyShortcut.trim();
+        if (!shortcut.startsWith('/')) {
+            shortcut = shortcut ? `/${shortcut}` : '/reply';
+        }
+
+        const newReply = {
+            id: Date.now().toString(),
+            shortcut: shortcut,
+            message: this.newFastReplyMessage.trim()
+        };
+
+        this.fastReplies = [...this.fastReplies, newReply];
+        
+        try {
+            localStorage.setItem('whatzupp_fast_replies', JSON.stringify(this.fastReplies));
+        } catch(e) {}
+
+        this.isAddingFastReply = false;
+    }
+
+    handleSelectFastReply(event) {
+        const msg = event.currentTarget.dataset.msg;
+        if (msg) {
+            this.newMessageText = this.newMessageText ? `${this.newMessageText} ${msg}` : msg;
+            this.handleCloseFastReplies();
+        }
+    }
+
+    // ════════════════════════════════════════
+    // ─── EMOJI PICKER ───
     // ════════════════════════════════════════
 
     handleAttachClick() {
@@ -769,7 +870,8 @@ export default class WhatzuppChatPanel extends LightningElement {
             });
 
             if (!uploadRes.ok) {
-                throw new Error('Upload failed');
+                const errData = await uploadRes.json().catch(() => ({}));
+                throw new Error(errData.error || 'Upload failed');
             }
 
             const uploadData = await uploadRes.json();
@@ -782,32 +884,45 @@ export default class WhatzuppChatPanel extends LightningElement {
             else if (file.type.startsWith('video/')) mediaType = 'video';
             else if (file.type.startsWith('audio/')) mediaType = 'audio';
 
-            await fetch(`${this.appBaseUrl}/api/send-message`, {
-                method: 'POST',
-                headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
-                body: JSON.stringify({
-                    to: this.contactPhone,
-                    message: '',
-                    workspaceId: 'salescloud-ws-1',
-                    mediaId: uploadData.id,
-                    mediaType: mediaType,
-                    mimeType: file.type,
-                    filename: file.name
-                })
-            });
+            let wamid = null;
+            try {
+                const sendRes = await fetch(`${this.appBaseUrl}/api/send-message`, {
+                    method: 'POST',
+                    headers: this._getHeaders({ 'Content-Type': 'application/json', 'X-Workspace-Id': 'salescloud-ws-1' }),
+                    body: JSON.stringify({
+                        to: this.contactPhone,
+                        message: '',
+                        workspaceId: 'salescloud-ws-1',
+                        mediaId: uploadData.id,
+                        mediaType: mediaType,
+                        mimeType: file.type,
+                        filename: file.name
+                    })
+                });
 
-            const rawLocal = {
-                id: 'file-' + Date.now(),
-                content: `📎 ${file.name}`,
-                timestamp: new Date().toISOString(),
-                direction: 'OUTBOUND',
-                mediaType,
-                mediaId: uploadData.id,
-                filename: file.name,
-            };
-            const localMsg = this._formatMessageItem(rawLocal);
-            this.messages = [...this.messages, localMsg];
-            this.scrollToBottom();
+                if (sendRes.ok) {
+                    const sendData = await sendRes.json();
+                    wamid = sendData?.data?.messages?.[0]?.id || null;
+                }
+            } catch (sendErr) {
+                console.warn('[WhatzuppChat] Vercel send-message warning (will persist via Apex):', sendErr);
+            }
+
+            // Step 2: Create/Upsert record in Salesforce via Apex so it persists!
+            const messageId = wamid || ('file-' + Date.now());
+            const mediaContent = `[Media: ${mediaType}: ${uploadData.id}] ${file.name}`;
+            try {
+                await createOutboundMessage({
+                    phone: this.contactPhone,
+                    content: mediaContent,
+                    messageId: messageId,
+                    recordId: this.recordId,
+                    objectApiName: this.objectApiName
+                });
+                await this.loadMessagesFromApex();
+            } catch (apexError) {
+                console.error('[WhatzuppChat] Apex createOutboundMessage (media) failed:', apexError);
+            }
 
         } catch (e) {
             console.error('File upload/send error:', e);

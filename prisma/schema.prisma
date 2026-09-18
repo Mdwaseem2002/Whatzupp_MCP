@@ -1,0 +1,157 @@
+// prisma/schema.prisma
+// WhatZupp Multi-Tenant SaaS Platform v2.0
+// Database: Supabase Postgres
+// ORM: Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Tenants ───
+// Each customer organization is a tenant.
+// Created ONLY after admin approval of a signup request.
+model Tenant {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String   @db.VarChar(255)
+  tenantCode String   @unique @map("tenant_code") @db.VarChar(50)
+  // Unique code: PENTACLOUD, ABC_CORP, ESTERA
+  // Used for debugging, audit logs, and future URL routing
+  status     String   @default("active") @db.VarChar(20)
+  // active | disabled
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  users            User[]
+  tenantWorkspaces TenantWorkspace[]
+  auditLogs        AuditLog[]
+
+  @@map("tenants")
+}
+
+// ─── Tenant Workspace Licensing ───
+// Defines which workspace products a tenant has purchased/licensed.
+// Users can only receive permissions that exist within their tenant's licenses.
+model TenantWorkspace {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  workspaceType String   @map("workspace_type") @db.VarChar(50)
+  // Values: SFMC, SALES_CLOUD (future: ZOHO, HUBSPOT, DYNAMICS)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, workspaceType])
+  @@map("tenant_workspaces")
+}
+
+// ─── Users (Approved, Active Accounts) ───
+// Created only after admin approves a signup request.
+// SUPER_ADMIN has tenantId = NULL (platform-level).
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String?  @map("tenant_id") @db.Uuid
+  // NULL for SUPER_ADMIN (platform-level, not bound to any tenant)
+  fullName     String   @map("full_name") @db.VarChar(255)
+  phone        String?  @db.VarChar(20)
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  role         String   @default("TENANT_USER") @db.VarChar(30)
+  // SUPER_ADMIN | TENANT_ADMIN | TENANT_USER
+  status       String   @default("active") @db.VarChar(20)
+  // active | suspended | disabled
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant               Tenant?               @relation(fields: [tenantId], references: [id])
+  workspacePermissions WorkspacePermission[]
+  auditLogs            AuditLog[]            @relation("AuditLogUser")
+  performedAuditLogs   AuditLog[]            @relation("AuditLogPerformedBy")
+  approvedRequests     SignupRequest[]
+
+  @@map("users")
+}
+
+// ─── Signup Requests (Pending Approval Queue) ───
+// Records are created when a user submits the signup form.
+// Admin reviews and approves/rejects. Tenant + User created on approval.
+model SignupRequest {
+  id                  String    @id @default(uuid()) @db.Uuid
+  fullName            String    @map("full_name") @db.VarChar(255)
+  organizationName    String?   @map("organization_name") @db.VarChar(255)
+  // Company/Org name — helps admin decide whether to create new tenant or attach to existing
+  phone               String?   @db.VarChar(20)
+  email               String    @unique @db.VarChar(255)
+  passwordHash        String    @map("password_hash") @db.VarChar(255)
+  requestedWorkspaces String[]  @map("requested_workspaces")
+  // e.g. ["SFMC"], ["SALES_CLOUD"], ["SFMC", "SALES_CLOUD"]
+  status              String    @default("PENDING") @db.VarChar(20)
+  // PENDING | APPROVED | REJECTED | SUSPENDED
+  approvedBy          String?   @map("approved_by") @db.Uuid
+  approvedAt          DateTime? @map("approved_at")
+  rejectedReason      String?   @map("rejected_reason") @db.Text
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  approver User? @relation(fields: [approvedBy], references: [id])
+
+  @@map("signup_requests")
+}
+
+// ─── Workspace Permissions (User-Level) ───
+// Each record grants a specific user access to a specific workspace type.
+// Must be a SUBSET of the user's tenant's TenantWorkspace licenses.
+model WorkspacePermission {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  workspaceType String   @map("workspace_type") @db.VarChar(50)
+  // Values: SFMC, SALES_CLOUD (must exist in tenant_workspaces)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceType])
+  @@map("workspace_permissions")
+}
+
+// ─── Admin Notifications ───
+// Created when events require SUPER_ADMIN attention (new signup, etc.)
+model AdminNotification {
+  id          String   @id @default(uuid()) @db.Uuid
+  type        String   @db.VarChar(50)
+  // SIGNUP_REQUEST | USER_SUSPENDED | TENANT_DISABLED | ACCESS_CHANGED
+  referenceId String   @map("reference_id") @db.Uuid
+  // Points to signup_requests.id, users.id, or tenants.id
+  isRead      Boolean  @default(false) @map("is_read")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("admin_notifications")
+}
+
+// ─── Audit Logs ───
+// Immutable record of every important action in the platform.
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  // NULL for platform-level actions (SUPER_ADMIN operations)
+  userId      String?  @map("user_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  // SIGNUP_SUBMITTED | USER_APPROVED | USER_REJECTED | LOGIN_SUCCESS |
+  // LOGIN_FAILURE | WORKSPACE_CHANGED | ACCESS_GRANTED | ACCESS_REVOKED |
+  // USER_SUSPENDED | USER_REACTIVATED | TENANT_DISABLED | TENANT_ENABLED |
+  // SYSTEM_SEED
+  details     Json?
+  performedBy String?  @map("performed_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant    Tenant? @relation(fields: [tenantId], references: [id])
+  user      User?   @relation("AuditLogUser", fields: [userId], references: [id])
+  performer User?   @relation("AuditLogPerformedBy", fields: [performedBy], references: [id])
+
+  @@map("audit_logs")
+}

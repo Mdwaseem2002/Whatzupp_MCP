@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { workspaceRegistry } from './connectors/workspaceRegistry';
 import { Connector } from './connectors/connectorInterface';
-import { verifySessionToken } from './auth';
+import { verifySessionToken, SessionPayload } from './auth';
 
 export interface WorkspaceAuthResult {
   success: boolean;
@@ -69,7 +69,7 @@ export async function validateWorkspaceAccess(
     }
   }
 
-  let user: { userId: string; userName: string } | null = null;
+  let user: SessionPayload | null = null;
   if (token) {
     user = await verifySessionToken(token);
   }
@@ -78,7 +78,14 @@ export async function validateWorkspaceAccess(
   const isDev = process.env.NODE_ENV !== 'production';
   const devUserHeader = headers.get('x-dev-user-id');
   if (!user && (devUserHeader || isDev)) {
-    user = { userId: devUserHeader || 'dev-user-1', userName: 'Dev User' };
+    user = {
+      userId: devUserHeader || 'dev-user-1',
+      email: 'dev@whatzupp.com',
+      fullName: 'Dev User',
+      tenantId: null,
+      role: 'SUPER_ADMIN',
+      workspacePermissions: ['SFMC', 'SALES_CLOUD'],
+    };
   }
 
   if (!user) {

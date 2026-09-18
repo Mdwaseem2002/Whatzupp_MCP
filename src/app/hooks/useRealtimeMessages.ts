@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Contact, Message } from '@/types';
 
-export function useRealtimeMessages(selectedContact: Contact | null) {
+export function useRealtimeMessages(selectedContact: Contact | null, workspaceId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   // Track which contact the current messages belong to
   const currentPhoneRef = useRef<string | null>(null);
@@ -25,7 +25,7 @@ export function useRealtimeMessages(selectedContact: Contact | null) {
     // Initial fetch from conversation messages API (works for Sales Cloud & SFMC)
     const fetchMessages = async () => {
       try {
-        const response = await fetch(`/api/conversations/${normalizedPhone}/messages`);
+        const response = await fetch(`/api/conversations/${normalizedPhone}/messages?workspaceId=${workspaceId}`);
         const data = await response.json();
         
         if (currentPhoneRef.current === normalizedPhone && data.messages && Array.isArray(data.messages)) {
@@ -59,7 +59,7 @@ export function useRealtimeMessages(selectedContact: Contact | null) {
     const connectSSE = () => {
       if (isCancelled) return;
 
-      eventSource = new EventSource(`/api/messages/stream?phoneNumber=${normalizedPhone}`);
+      eventSource = new EventSource(`/api/messages/stream?phoneNumber=${normalizedPhone}&workspaceId=${workspaceId}`);
 
       eventSource.onopen = () => {
         reconnectAttempts = 0; // Reset on successful connection
@@ -103,7 +103,7 @@ export function useRealtimeMessages(selectedContact: Contact | null) {
     const pollMessages = async () => {
       if (isCancelled) return;
       try {
-        const response = await fetch(`/api/conversations/${normalizedPhone}/messages`);
+        const response = await fetch(`/api/conversations/${normalizedPhone}/messages?workspaceId=${workspaceId}`);
         const data = await response.json();
         
         if (currentPhoneRef.current === normalizedPhone && data.messages && Array.isArray(data.messages)) {

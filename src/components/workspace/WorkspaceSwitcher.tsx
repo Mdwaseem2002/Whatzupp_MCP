@@ -3,6 +3,7 @@
 // src/components/workspace/WorkspaceSwitcher.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { Building2, Briefcase, Globe, Users2, ShoppingBag, Zap, ChevronDown, Check } from 'lucide-react';
 
 const renderIcon = (name: string, props: any = { size: 16 }) => {
@@ -19,6 +20,7 @@ const renderIcon = (name: string, props: any = { size: 16 }) => {
 
 export default function WorkspaceSwitcher() {
   const { state, activeWorkspace, setActiveWorkspace } = useWorkspace();
+  const { hasWorkspacePermission } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,6 +32,13 @@ export default function WorkspaceSwitcher() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Filter workspaces by permission
+  const allowedWorkspaces = state.workspaces.filter(ws => {
+    if (ws.type === 'salescloud') return hasWorkspacePermission('SALES_CLOUD');
+    if (ws.type === 'sfmc') return hasWorkspacePermission('SFMC');
+    return true;
+  });
 
   if (!activeWorkspace) return null;
 
@@ -48,19 +57,21 @@ export default function WorkspaceSwitcher() {
         <span className="text-sm font-semibold text-gray-900 tracking-tight">
           {activeWorkspace.name}
         </span>
-        <ChevronDown 
-          size={14} 
-          className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
+        {allowedWorkspaces.length > 1 && (
+          <ChevronDown 
+            size={14} 
+            className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        )}
       </button>
 
-      {open && (
+      {open && allowedWorkspaces.length > 1 && (
         <div className="absolute top-[calc(100%+8px)] left-0 min-w-[240px] bg-white border border-gray-200 rounded-xl shadow-lg shadow-black/[0.08] z-[100] py-1.5 focus:outline-none">
           <div className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-            Workspaces
+            Licensed Workspaces
           </div>
           <div className="flex flex-col">
-            {state.workspaces.map(ws => (
+            {allowedWorkspaces.map(ws => (
               <button
                 key={ws.id}
                 onClick={() => { setActiveWorkspace(ws.id); setOpen(false); }}

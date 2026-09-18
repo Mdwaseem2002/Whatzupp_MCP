@@ -58,7 +58,8 @@ function playNotificationSound() {
 }
 
 export function useGlobalNotifications(
-  selectedPhoneNumber: string | null
+  selectedPhoneNumber: string | null,
+  workspaceId: string
 ): UseGlobalNotificationsReturn {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
@@ -114,7 +115,7 @@ export function useGlobalNotifications(
     let reconnectAttempts = 0;
 
     const connect = () => {
-      eventSource = new EventSource('/api/messages/stream/global');
+      eventSource = new EventSource(`/api/messages/stream/global?workspaceId=${workspaceId}`);
 
       eventSource.onopen = () => {
         reconnectAttempts = 0; // Reset on successful connection
@@ -202,7 +203,7 @@ export function useGlobalNotifications(
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
       document.removeEventListener('click', handleFirstInteraction);
     };
-  }, [notificationPermission]);
+  }, [notificationPermission, workspaceId]);
 
   return {
     unreadCounts,

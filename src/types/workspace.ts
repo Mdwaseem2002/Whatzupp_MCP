@@ -46,6 +46,36 @@ export interface FastReplyTemplate {
   createdAt: string;
 }
 
+export type LabelColor = 'green' | 'yellow' | 'orange' | 'red' | 'blue' | 'purple' | 'gray';
+
+export const LABEL_COLORS: Record<LabelColor, string> = {
+  green: '#10b981',
+  yellow: '#eab308',
+  orange: '#f97316',
+  red: '#ef4444',
+  blue: '#3b82f6',
+  purple: '#a855f7',
+  gray: '#6b7280'
+};
+
+export interface ChatLabel {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: LabelColor;
+  createdAt: string;
+}
+
+export interface SavedList {
+  id: string;
+  workspaceId: string;
+  name: string;
+  labels: string[]; // array of label IDs
+  unreadOnly?: boolean;
+  createdAt: string;
+}
+
+
 export type AppScreen =
   | 'onboarding-profile'
   | 'onboarding-workspace'
@@ -59,7 +89,8 @@ export type AppScreen =
   | 'sfmc'
   | 'salescloud'
   | 'settings'
-  | 'fast-reply';
+  | 'fast-reply'
+  | 'labels';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -72,6 +103,10 @@ export interface AppState {
   activeWorkspaceId: string | null;
   activeScreen: AppScreen;
   theme: ThemeMode;
+  chatLabels: ChatLabel[];
+  savedLists: SavedList[];
+  conversationLabels: Record<string, string[]>; // mapping of conversationId (contactId) -> array of labelIds
+  activeLabelId: string | null;
 }
 
 // Default seed workspaces for onboarding
@@ -112,4 +147,16 @@ export const SEED_FAST_REPLIES: Omit<FastReplyTemplate, 'id' | 'createdAt'>[] = 
   { title: 'Greeting', body: 'Hi! Thanks for reaching out. How can I help you today?' },
   { title: 'Follow Up', body: 'Just following up on our previous conversation. Please let me know if you have any questions.' },
   { title: 'Out of Office', body: 'Thank you for your message. I am currently out of the office and will respond as soon as possible.' },
+];
+
+export const SYSTEM_LABELS: Omit<ChatLabel, 'id' | 'workspaceId' | 'createdAt'>[] = [
+  { name: 'New Lead', color: 'blue' },
+  { name: 'Qualified', color: 'purple' },
+  { name: 'Hot Lead', color: 'orange' },
+  { name: 'VIP', color: 'yellow' },
+  { name: 'Customer', color: 'green' },
+  { name: 'Follow Up', color: 'gray' },
+  { name: 'Support', color: 'gray' },
+  { name: 'Won', color: 'green' },
+  { name: 'Lost', color: 'red' },
 ];

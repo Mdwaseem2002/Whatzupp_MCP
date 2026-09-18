@@ -44,12 +44,12 @@ export async function POST(
 
   try {
     const body = await request.json();
-    const { name, phoneNumber, email, company } = body;
+    const { name, phoneNumber, email, company, labels } = body;
     if (!name || !phoneNumber) {
       return NextResponse.json({ error: 'name and phoneNumber are required' }, { status: 400 });
     }
 
-    const contact = await auth.connector!.createContact({ name, phoneNumber, email, company });
+    const contact = await auth.connector!.createContact({ name, phoneNumber, email, company, labels });
     return NextResponse.json({ success: true, workspaceId, contact });
   } catch (error: any) {
     console.error(`[API /workspaces/${workspaceId}/contacts] POST Error:`, error);
@@ -70,12 +70,12 @@ export async function PATCH(
 
   try {
     const body = await request.json();
-    const { id, name, phoneNumber, email, company } = body;
+    const { id, name, phoneNumber, email, company, labels } = body;
     if (!id) {
       return NextResponse.json({ error: 'id is required for update' }, { status: 400 });
     }
 
-    const success = await auth.connector!.updateContact(id, { name, phoneNumber, email, company });
+    const success = await auth.connector!.updateContact(id, { name, phoneNumber, email, company, labels });
     return NextResponse.json({ success, workspaceId, id });
   } catch (error: any) {
     console.error(`[API /workspaces/${workspaceId}/contacts] PATCH Error:`, error);

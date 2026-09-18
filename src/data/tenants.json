@@ -1,0 +1,96 @@
+[
+  {
+    "id": "t-pentacloud",
+    "name": "Pentacloud Consultancy",
+    "tenantCode": "PENTACLOUD",
+    "status": "active",
+    "createdAt": "2026-09-17T10:36:56.935Z",
+    "tenantWorkspaces": [
+      {
+        "workspaceType": "SFMC"
+      },
+      {
+        "workspaceType": "SALES_CLOUD"
+      }
+    ],
+    "users": [
+      {
+        "id": "u-1",
+        "fullName": "Arshad Ali",
+        "email": "arshad@pentacloud.com",
+        "role": "TENANT_ADMIN",
+        "status": "active"
+      },
+      {
+        "id": "u-2",
+        "fullName": "Ravi Kumar",
+        "email": "ravi@pentacloud.com",
+        "role": "TENANT_USER",
+        "status": "active"
+      }
+    ]
+  },
+  {
+    "id": "t-abc",
+    "name": "ABC Corp Enterprise",
+    "tenantCode": "ABC_CORP",
+    "status": "active",
+    "createdAt": "2026-09-17T10:36:56.935Z",
+    "tenantWorkspaces": [
+      {
+        "workspaceType": "SFMC"
+      }
+    ],
+    "users": [
+      {
+        "id": "u-3",
+        "fullName": "John Smith",
+        "email": "john@abccorp.com",
+        "role": "TENANT_ADMIN",
+        "status": "active"
+      }
+    ]
+  },
+  {
+    "id": "t-req-1789628622394",
+    "name": "Penta",
+    "tenantCode": "PENTA",
+    "status": "active",
+    "createdAt": "2026-09-17T07:03:42.395Z",
+    "tenantWorkspaces": [
+      {
+        "workspaceType": "SFMC"
+      }
+    ],
+    "users": [
+      {
+        "id": "u-req-1789628622394",
+        "fullName": "Md Waseem",
+        "email": "waseem@penta.com",
+        "role": "TENANT_ADMIN",
+        "status": "active"
+      }
+    ]
+  },
+  {
+    "id": "t-req-1789628449498",
+    "name": "jobi",
+    "tenantCode": "JOBI",
+    "status": "active",
+    "createdAt": "2026-09-17T07:00:49.498Z",
+    "tenantWorkspaces": [
+      {
+        "workspaceType": "SALES_CLOUD"
+      }
+    ],
+    "users": [
+      {
+        "id": "u-req-1789628449498",
+        "fullName": "mind",
+        "email": "jobi@test.com",
+        "role": "TENANT_ADMIN",
+        "status": "active"
+      }
+    ]
+  }
+]

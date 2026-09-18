@@ -1,0 +1,26 @@
+[
+  {
+    "id": "req-1789628622394",
+    "fullName": "Md Waseem",
+    "organizationName": "Penta",
+    "email": "waseem@penta.com",
+    "phone": "9966667755",
+    "requestedWorkspaces": [
+      "SFMC"
+    ],
+    "status": "APPROVED",
+    "createdAt": "2026-09-17T07:03:42.395Z"
+  },
+  {
+    "id": "req-1789628449498",
+    "fullName": "mind",
+    "organizationName": "jobi",
+    "email": "jobi@test.com",
+    "phone": "9988777777",
+    "requestedWorkspaces": [
+      "SALES_CLOUD"
+    ],
+    "status": "APPROVED",
+    "createdAt": "2026-09-17T07:00:49.498Z"
+  }
+]

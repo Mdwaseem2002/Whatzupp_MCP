@@ -51,14 +51,14 @@ export class SalesCloudConnector implements Connector {
       }
 
       // Query Leads from Salesforce (all Leads in org, ordered by newest first)
-      let leadSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c FROM Lead ORDER BY CreatedDate DESC LIMIT ${limit}`;
+      let leadSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c, WhatZupp_Labels__c FROM Lead ORDER BY CreatedDate DESC LIMIT ${limit}`;
       // Query Contacts from Salesforce (ONLY those created/synced via WhatZupp, ignoring standard sample contacts)
-      let contactSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c FROM Contact WHERE WhatZupp_Sync_Status__c != null ORDER BY LastModifiedDate DESC LIMIT ${limit}`;
+      let contactSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c, WhatZupp_Labels__c FROM Contact WHERE WhatZupp_Sync_Status__c != null ORDER BY LastModifiedDate DESC LIMIT ${limit}`;
 
       if (params.search) {
         const q = params.search.replace(/'/g, "\\'");
-        leadSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c FROM Lead WHERE (Name LIKE '%${q}%' OR Phone LIKE '%${q}%' OR MobilePhone LIKE '%${q}%' OR Email LIKE '%${q}%' OR Company LIKE '%${q}%') ORDER BY CreatedDate DESC LIMIT ${limit}`;
-        contactSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c FROM Contact WHERE WhatZupp_Sync_Status__c != null AND (Name LIKE '%${q}%' OR Phone LIKE '%${q}%' OR MobilePhone LIKE '%${q}%' OR Email LIKE '%${q}%') ORDER BY LastModifiedDate DESC LIMIT ${limit}`;
+        leadSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c, WhatZupp_Labels__c FROM Lead WHERE (Name LIKE '%${q}%' OR Phone LIKE '%${q}%' OR MobilePhone LIKE '%${q}%' OR Email LIKE '%${q}%' OR Company LIKE '%${q}%') ORDER BY CreatedDate DESC LIMIT ${limit}`;
+        contactSoql = `SELECT Id, Name, Phone, MobilePhone, Email, Company, WhatZupp_Sync_Status__c, WhatZupp_Last_Synced__c, WhatZupp_Labels__c FROM Contact WHERE WhatZupp_Sync_Status__c != null AND (Name LIKE '%${q}%' OR Phone LIKE '%${q}%' OR MobilePhone LIKE '%${q}%' OR Email LIKE '%${q}%') ORDER BY LastModifiedDate DESC LIMIT ${limit}`;
       }
 
       let headers = { Authorization: `Bearer ${access_token}` };
@@ -95,6 +95,7 @@ export class SalesCloudConnector implements Connector {
             email: r.Email || '',
             company: r.Company || 'Salesforce Lead',
             lastSyncedAt: r.WhatZupp_Last_Synced__c || new Date().toISOString(),
+            labels: r.WhatZupp_Labels__c || '',
           });
         });
       }
@@ -111,6 +112,7 @@ export class SalesCloudConnector implements Connector {
             email: r.Email || '',
             company: r.Company || 'Salesforce Contact',
             lastSyncedAt: r.WhatZupp_Last_Synced__c || new Date().toISOString(),
+            labels: r.WhatZupp_Labels__c || '',
           });
         });
       }
@@ -145,7 +147,13 @@ export class SalesCloudConnector implements Connector {
       if (access_token.startsWith('mock-')) {
         let msgs = [...this.fallbackMessages];
         if (params.phoneNumber) {
-          msgs = msgs.filter(m => m.senderId === params.phoneNumber || m.recipientId === params.phoneNumber);
+          const cleanP = params.phoneNumber.replace(/[^0-9]/g, '');
+          const last10 = cleanP.slice(-10);
+          msgs = msgs.filter(m => {
+            const s = (m.senderId || '').replace(/[^0-9]/g, '');
+            const r = (m.recipientId || '').replace(/[^0-9]/g, '');
+            return s.endsWith(last10) || r.endsWith(last10);
+          });
         }
         if (params.recordId) {
           msgs = msgs.filter(m => m.salesforceRecordId === params.recordId);
@@ -154,6 +162,9 @@ export class SalesCloudConnector implements Connector {
           const cursorTime = new Date(params.cursor).getTime();
           msgs = msgs.filter(m => new Date(m.timestamp).getTime() > cursorTime);
         }
+
+        // Filter out test messages from automated unit test suite
+        msgs = msgs.filter(m => m.content && !m.content.includes('formatted phone') && !m.content.includes('Outbound from Sales Cloud'));
 
         msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const pageMsgs = msgs.slice(0, pageSize);
@@ -170,7 +181,8 @@ export class SalesCloudConnector implements Connector {
       }
       if (params.phoneNumber) {
         const safePhone = params.phoneNumber.replace(/'/g, "\\'");
-        const last10 = safePhone.length >= 10 ? safePhone.slice(-10) : safePhone;
+        const cleanDigits = safePhone.replace(/[^0-9]/g, '');
+        const last10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
         matchConditions.push(`Phone__c = '${safePhone}' OR Phone__c LIKE '%${last10}'`);
       }
 
@@ -180,16 +192,24 @@ export class SalesCloudConnector implements Connector {
       }
       if (params.cursor) {
         const safeCursor = params.cursor.replace(/'/g, "\\'");
-        conditions.push(`Timestamp__c > ${safeCursor}`);
+        conditions.push(`Timestamp__c < ${safeCursor}`);
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const soql = `SELECT Id, Message_Id__c, Phone__c, Content__c, Direction__c, Status__c, Timestamp__c, Lead__c, Contact__c FROM WhatsApp_Message__c ${whereClause} ORDER BY Timestamp__c ASC LIMIT ${pageSize}`;
+      const soql = `SELECT Id, Message_Id__c, Phone__c, Content__c, Direction__c, Status__c, Timestamp__c, Lead__c, Contact__c FROM WhatsApp_Message__c ${whereClause} ORDER BY Timestamp__c DESC LIMIT ${pageSize}`;
 
       const queryUrl = `${instance_url}/services/data/v59.0/query?q=${encodeURIComponent(soql)}`;
-      const res = await fetch(queryUrl, {
+      let res = await fetch(queryUrl, {
         headers: { Authorization: `Bearer ${access_token}` },
       });
+
+      if (res.status === 401) {
+        console.warn('[SalesCloudConnector] Token expired during fetchMessages, attempting refresh...');
+        const fresh = await getSalesCloudAccessToken(true);
+        res = await fetch(queryUrl, {
+          headers: { Authorization: `Bearer ${fresh.access_token}` },
+        });
+      }
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
@@ -203,25 +223,37 @@ export class SalesCloudConnector implements Connector {
       if (records.length === 0) {
         let msgs = [...this.fallbackMessages];
         if (params.phoneNumber) {
-          msgs = msgs.filter(m => m.senderId === params.phoneNumber || m.recipientId === params.phoneNumber);
+          const cleanP = params.phoneNumber.replace(/[^0-9]/g, '');
+          const last10 = cleanP.slice(-10);
+          msgs = msgs.filter(m => {
+            const s = (m.senderId || '').replace(/[^0-9]/g, '');
+            const r = (m.recipientId || '').replace(/[^0-9]/g, '');
+            return s.endsWith(last10) || r.endsWith(last10);
+          });
         }
+        msgs = msgs.filter(m => m.content && !m.content.includes('formatted phone') && !m.content.includes('Outbound from Sales Cloud'));
         if (msgs.length > 0) {
           return { messages: msgs };
         }
       }
 
-      const messages: WorkspaceMessage[] = records.map((r: any) => ({
-        id: r.Message_Id__c || r.Id,
-        senderId: r.Direction__c === 'OUTBOUND' ? 'salescloud-system' : r.Phone__c,
-        recipientId: r.Direction__c === 'OUTBOUND' ? r.Phone__c : 'salescloud-system',
-        content: r.Content__c || '',
-        timestamp: r.Timestamp__c || new Date().toISOString(),
-        status: (r.Status__c || 'SENT').toUpperCase(),
-        direction: (r.Direction__c || 'INBOUND').toUpperCase() as 'INBOUND' | 'OUTBOUND',
-        salesforceRecordId: r.Contact__c || r.Lead__c,
-      }));
-
       const nextCursor = records.length === pageSize ? records[records.length - 1].Timestamp__c : undefined;
+      
+      // Reverse records so they are returned in chronological order (oldest to newest)
+      records.reverse();
+
+      const messages: WorkspaceMessage[] = records
+        .filter((r: any) => r.Content__c && !r.Content__c.includes('formatted phone') && !r.Content__c.includes('Outbound from Sales Cloud'))
+        .map((r: any) => ({
+          id: r.Message_Id__c || r.Id,
+          senderId: r.Direction__c === 'OUTBOUND' ? 'salescloud-system' : r.Phone__c,
+          recipientId: r.Direction__c === 'OUTBOUND' ? r.Phone__c : 'salescloud-system',
+          content: r.Content__c || '',
+          timestamp: r.Timestamp__c || new Date().toISOString(),
+          status: (r.Status__c || 'SENT').toUpperCase(),
+          direction: (r.Direction__c || 'INBOUND').toUpperCase() as 'INBOUND' | 'OUTBOUND',
+          salesforceRecordId: r.Contact__c || r.Lead__c,
+        }));
 
       return { messages, nextCursor };
     } catch (err) {
@@ -239,20 +271,35 @@ export class SalesCloudConnector implements Connector {
     content: string;
     salesforceRecordId?: string;
     salesforceObjectType?: string;
+    accessToken?: string;
+    phoneNumberId?: string;
+    mediaId?: string;
+    mediaType?: string;
+    mimeType?: string;
+    filename?: string;
   }): Promise<{ messageId: string; status: string }> {
-    // 1. Send via WhatsApp Meta API
+    // 1. Send via WhatsApp Meta API (text or media)
     const waResult = await sendWhatsAppMessage({
       to: params.recipientPhone,
       message: params.content,
+      accessToken: params.accessToken,
+      phoneNumberId: params.phoneNumberId,
+      mediaId: params.mediaId,
+      mediaType: params.mediaType,
+      filename: params.filename,
     });
 
     const wamid = waResult.messageId || `wamid.sc.${Date.now()}`;
+
+    const formattedContent = params.mediaId
+      ? (params.content ? `${params.content}\n[Media: ${params.mediaType}: ${params.mediaId}]` : `[Media: ${params.mediaType}: ${params.mediaId}] ${params.filename || ''}`)
+      : params.content;
 
     // 2. Save outbound message record to Salesforce WhatsApp_Message__c
     await this.saveOutboundMessage({
       messageId: wamid,
       recipientPhone: params.recipientPhone,
-      content: params.content,
+      content: formattedContent,
       salesforceRecordId: params.salesforceRecordId,
       salesforceObjectType: params.salesforceObjectType,
       status: 'SENT',
@@ -367,7 +414,7 @@ export class SalesCloudConnector implements Connector {
         sender: 'user',
         status: (params.status || 'SENT').toUpperCase(),
         recipientId: cleanPhone,
-      }).catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
+      }, 'salescloud-ws-1').catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
 
       // Set conversation ownership (Centralized Choke Point for Sales Cloud)
       try {
@@ -386,17 +433,41 @@ export class SalesCloudConnector implements Connector {
   /**
    * Idempotently saves an INBOUND message to Salesforce WhatsApp_Message__c object.
    */
-  async saveInboundMessage(params: {
-    messageId: string;
-    senderPhone: string;
-    content: string;
-    timestamp?: string;
-    leadId?: string;
-    contactId?: string;
-  }): Promise<{ success: boolean; messageId: string }> {
-    const wamid = params.messageId;
-    const timestamp = params.timestamp || new Date().toISOString();
-    const cleanPhone = params.senderPhone.replace(/^\+/, '').trim();
+  async saveInboundMessage(
+    arg1: string | { messageId?: string; senderPhone?: string; phone?: string; content?: string; timestamp?: string; leadId?: string; contactId?: string },
+    arg2?: { messageId?: string; content?: string; timestamp?: string; leadId?: string; contactId?: string }
+  ): Promise<{ success: boolean; messageId: string }> {
+    let senderPhone = '';
+    let messageId = '';
+    let content = '';
+    let timestamp: string | undefined;
+    let leadId: string | undefined;
+    let contactId: string | undefined;
+
+    if (typeof arg1 === 'string') {
+      senderPhone = arg1;
+      messageId = arg2?.messageId || `wamid_${Date.now()}`;
+      content = arg2?.content || '';
+      timestamp = arg2?.timestamp;
+      leadId = arg2?.leadId;
+      contactId = arg2?.contactId;
+    } else if (arg1 && typeof arg1 === 'object') {
+      senderPhone = arg1.senderPhone || arg1.phone || '';
+      messageId = arg1.messageId || `wamid_${Date.now()}`;
+      content = arg1.content || '';
+      timestamp = arg1.timestamp;
+      leadId = arg1.leadId;
+      contactId = arg1.contactId;
+    }
+
+    if (!senderPhone) {
+      console.error('[SalesCloudConnector] saveInboundMessage missing senderPhone parameter');
+      return { success: false, messageId: messageId || '' };
+    }
+
+    const wamid = messageId;
+    const msgTimestamp = timestamp || new Date().toISOString();
+    const cleanPhone = senderPhone.replace(/^\+/, '').trim();
 
     try {
       const { access_token, instance_url } = await getSalesCloudAccessToken();
@@ -404,18 +475,18 @@ export class SalesCloudConnector implements Connector {
       if (!access_token.startsWith('mock-')) {
         const payload: Record<string, any> = {
           Phone__c: cleanPhone,
-          Content__c: params.content,
+          Content__c: content,
           Direction__c: 'INBOUND',
           Status__c: 'DELIVERED',
-          Timestamp__c: timestamp,
+          Timestamp__c: msgTimestamp,
         };
 
-        if (params.leadId) payload.Lead__c = params.leadId;
-        if (params.contactId) payload.Contact__c = params.contactId;
+        if (leadId) payload.Lead__c = leadId;
+        if (contactId) payload.Contact__c = contactId;
 
         // Idempotent External ID Upsert via Salesforce REST API
         const upsertUrl = `${instance_url}/services/data/v59.0/sobjects/WhatsApp_Message__c/Message_Id__c/${encodeURIComponent(wamid)}`;
-        console.log(`[SalesCloudConnector] saveInboundMessage: upserting ${wamid} from ${cleanPhone}, Lead=${params.leadId}, Contact=${params.contactId}`);
+        console.log(`[SalesCloudConnector] saveInboundMessage: upserting ${wamid} from ${cleanPhone}, Lead=${leadId}, Contact=${contactId}`);
         const upsertRes = await fetch(upsertUrl, {
           method: 'PATCH',
           headers: {
@@ -453,17 +524,17 @@ export class SalesCloudConnector implements Connector {
         }
 
         // Transactionally update WhatZupp_Last_Message__c on Lead or Contact
-        if (params.leadId) {
-          fetch(`${instance_url}/services/data/v59.0/sobjects/Lead/${params.leadId}`, {
+        if (leadId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Lead/${leadId}`, {
             method: 'PATCH',
             headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+            body: JSON.stringify({ WhatZupp_Last_Message__c: content.slice(0, 255), WhatZupp_Last_Synced__c: msgTimestamp })
           }).catch(e => console.warn('[SalesCloudConnector] Lead last message rollup failed:', e));
-        } else if (params.contactId) {
-          fetch(`${instance_url}/services/data/v59.0/sobjects/Contact/${params.contactId}`, {
+        } else if (contactId) {
+          fetch(`${instance_url}/services/data/v59.0/sobjects/Contact/${contactId}`, {
             method: 'PATCH',
             headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ WhatZupp_Last_Message__c: params.content.slice(0, 255), WhatZupp_Last_Synced__c: timestamp })
+            body: JSON.stringify({ WhatZupp_Last_Message__c: content.slice(0, 255), WhatZupp_Last_Synced__c: msgTimestamp })
           }).catch(e => console.warn('[SalesCloudConnector] Contact last message rollup failed:', e));
         }
       } else {
@@ -471,23 +542,23 @@ export class SalesCloudConnector implements Connector {
           id: wamid,
           senderId: cleanPhone,
           recipientId: 'sc-agent',
-          content: params.content,
-          timestamp,
+          content,
+          timestamp: msgTimestamp,
           status: 'DELIVERED',
           direction: 'INBOUND',
-          salesforceRecordId: params.contactId || params.leadId,
+          salesforceRecordId: contactId || leadId,
         });
       }
 
       // Emit real-time SSE update to UI
       emitRealtimeMessage(cleanPhone, {
         id: wamid,
-        content: params.content,
-        timestamp,
+        content,
+        timestamp: msgTimestamp,
         sender: 'contact',
         status: 'DELIVERED',
         recipientId: 'user',
-      }).catch(e => console.warn('[SalesCloudConnector] Realtime emit error:', e));
+      }, 'salescloud-ws-1').catch(e => console.warn('[SalesCloudConnector] SSE emit failed:', e));
 
       return { success: true, messageId: wamid };
     } catch (err) {
@@ -496,7 +567,7 @@ export class SalesCloudConnector implements Connector {
     }
   }
 
-  private async execSoql(soql: string): Promise<any[]> {
+  public async execSoql(soql: string): Promise<any[]> {
     try {
       let { access_token, instance_url } = await getSalesCloudAccessToken();
       if (access_token.startsWith('mock-')) return [];
@@ -607,6 +678,7 @@ export class SalesCloudConnector implements Connector {
     phoneNumber: string;
     email?: string;
     company?: string;
+    labels?: string;
   }): Promise<WorkspaceContactResult> {
     const phone = params.phoneNumber.replace(/[^0-9]/g, '');
     const fullName = params.name.trim();
@@ -636,6 +708,7 @@ export class SalesCloudConnector implements Connector {
             Email: email,
             WhatZupp_Sync_Status__c: 'Synced',
             WhatZupp_Last_Synced__c: new Date().toISOString(),
+            ...(params.labels ? { WhatZupp_Labels__c: params.labels } : {}),
           }),
         });
 
@@ -661,6 +734,7 @@ export class SalesCloudConnector implements Connector {
               Email: email,
               WhatZupp_Sync_Status__c: 'Synced',
               WhatZupp_Last_Synced__c: new Date().toISOString(),
+              ...(params.labels ? { WhatZupp_Labels__c: params.labels } : {}),
             }),
           });
         }
@@ -734,7 +808,7 @@ export class SalesCloudConnector implements Connector {
   async updateContactOrLead(
     recordId: string,
     objectType: 'Lead' | 'Contact',
-    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string; labels?: string }
   ): Promise<boolean> {
     try {
       const { access_token, instance_url } = await getSalesCloudAccessToken();
@@ -754,6 +828,7 @@ export class SalesCloudConnector implements Connector {
         }
         if (updates.email) payload.Email = updates.email;
         if (updates.company && objectType === 'Lead') payload.Company = updates.company;
+        if (updates.labels !== undefined) payload.WhatZupp_Labels__c = updates.labels;
 
         const url = `${instance_url}/services/data/v59.0/sobjects/${objectType}/${recordId}`;
         const res = await fetch(url, {
@@ -789,13 +864,14 @@ export class SalesCloudConnector implements Connector {
     phoneNumber: string;
     email?: string;
     company?: string;
+    labels?: string;
   }): Promise<WorkspaceContactResult> {
     return this.createLead(params);
   }
 
   async updateContact(
     id: string,
-    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string; labels?: string }
   ): Promise<boolean> {
     const objectType = id.startsWith('003') ? 'Contact' : 'Lead';
     return this.updateContactOrLead(id, objectType, updates);
@@ -822,4 +898,6 @@ export class SalesCloudConnector implements Connector {
     const { access_token } = await getSalesCloudAccessToken();
     return !access_token.startsWith('mock-');
   }
+
+
 }

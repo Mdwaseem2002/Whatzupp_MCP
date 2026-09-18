@@ -13,7 +13,7 @@ export async function emitRealtimeMessage(phoneNumber: string, message: {
   mediaType?: string;
   mediaId?: string;
   mediaUrl?: string;
-}) {
+}, workspaceId: string) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
     ? (process.env.VERCEL_URL?.startsWith('http') ? process.env.VERCEL_URL : `https://${process.env.VERCEL_URL}`)
     : 'http://localhost:3000';
@@ -26,6 +26,7 @@ export async function emitRealtimeMessage(phoneNumber: string, message: {
       ...message,
       recipientId: cleanPhone,
     },
+    workspaceId,
   };
 
   try {

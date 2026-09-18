@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { Contact, Message } from '@/types';
 import { formatTimestamp } from '@/utils/formatters';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pencil, Trash2, X, Check, MessageSquare, Search, UserPlus, Plus, FileText, LayoutTemplate } from 'lucide-react';
+import { Pencil, Trash2, X, Check, MessageSquare, Search, UserPlus, Plus, FileText, LayoutTemplate, Tag } from 'lucide-react';
+import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
+import { LABEL_COLORS } from '@/types/workspace';
 
 interface ChatListProps {
   contacts: Contact[];
@@ -25,10 +27,15 @@ const ChatList: React.FC<ChatListProps> = ({
   unreadCounts = {},
   onShowAddModal
 }) => {
+  const { state, setConversationLabels } = useWorkspace();
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [editName, setEditName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [labelMenuOpenId, setLabelMenuOpenId] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+
+  const workspaceLabels = state.chatLabels.filter(l => l.workspaceId === state.activeWorkspaceId);
 
   const getLastMessage = (phoneNumber: string): { text: string; time: string; timestamp: number; isTemplate: boolean } => {
     const normalizedPhone = phoneNumber.replace(/^\+/, '');
@@ -96,9 +103,23 @@ const ChatList: React.FC<ChatListProps> = ({
     setDeleteConfirmId(null);
   };
 
-  const filteredContacts = contacts.filter(c =>
-    !searchQuery || c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.phoneNumber.includes(searchQuery)
-  );
+  const filteredContacts = contacts.filter(c => {
+    const activeLabels = state.conversationLabels[c.id] || [];
+    
+    if (activeFilter && !activeLabels.includes(activeFilter)) {
+      return false;
+    }
+
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    if (c.name.toLowerCase().includes(query) || c.phoneNumber.includes(query)) return true;
+    
+    const hasMatchingLabel = activeLabels.some(labelId => {
+      const lbl = workspaceLabels.find(l => l.id === labelId);
+      return lbl && lbl.name.toLowerCase().includes(query);
+    });
+    return hasMatchingLabel;
+  });
 
   const sortedContacts = [...filteredContacts].sort((a, b) => {
     const aUnread = unreadCounts[a.phoneNumber.replace(/^\+/, '')] || 0;
@@ -135,7 +156,7 @@ const ChatList: React.FC<ChatListProps> = ({
         </div>
 
         {/* Search */}
-        <div className="relative">
+        <div className="relative mb-3">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
@@ -145,6 +166,45 @@ const ChatList: React.FC<ChatListProps> = ({
             className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-[#F8FAFC] border border-gray-200/80 text-[13px] text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-[#25D366] focus:ring-2 focus:ring-[#25D366]/10 transition-all"
           />
         </div>
+
+        {/* Label Filters */}
+        {workspaceLabels.length > 0 && (
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+            <button
+              onClick={() => setActiveFilter(null)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-all ${
+                activeFilter === null
+                  ? 'bg-gray-800 text-white shadow-sm'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              All Chats
+            </button>
+            {workspaceLabels.map(lbl => {
+              const count = contacts.filter(c => (state.conversationLabels[c.id] || []).includes(lbl.id)).length;
+              const isSelected = activeFilter === lbl.id;
+              return (
+                <button
+                  key={lbl.id}
+                  onClick={() => setActiveFilter(lbl.id)}
+                  className="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1.5"
+                  style={{
+                    backgroundColor: isSelected ? LABEL_COLORS[lbl.color] : '#F3F4F6',
+                    color: isSelected ? '#FFFFFF' : '#6B7280',
+                    boxShadow: isSelected ? '0 1px 2px rgba(0,0,0,0.1)' : 'none'
+                  }}
+                >
+                  {lbl.name}
+                  {count > 0 && (
+                    <span className="text-[10px] px-1 py-0.5 rounded-md bg-black/10" style={{ color: isSelected ? 'white' : '#9CA3AF' }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       
       {/* ─── Contact List ─── */}
@@ -192,6 +252,7 @@ const ChatList: React.FC<ChatListProps> = ({
                     ${isSelected
                       ? 'bg-[#25D366]/[0.08]'
                       : 'hover:bg-[#F8FAFC]'}
+                    ${labelMenuOpenId === contact.id ? 'z-50' : 'z-0'}
                   `}
                   style={{
                     borderLeft: isSelected ? '3px solid #25D366' : '3px solid transparent',
@@ -299,9 +360,53 @@ const ChatList: React.FC<ChatListProps> = ({
                                 {unreadCount > 99 ? '99+' : unreadCount}
                               </motion.span>
                             ) : (
-                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={(e) => handleStartEdit(e, contact)} className="p-1 rounded-md text-gray-400 hover:text-[#25D366] hover:bg-[#25D366]/10 transition-all hover:scale-110" title="Edit"><Pencil size={13} /></button>
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity relative">
+                                <button onClick={(e) => { e.stopPropagation(); setLabelMenuOpenId(labelMenuOpenId === contact.id ? null : contact.id); }} className="p-1 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-all hover:scale-110" title="Assign Label"><Tag size={13} /></button>
                                 <button onClick={(e) => handleDeleteClick(e, contact.id)} className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all hover:scale-110" title="Delete"><Trash2 size={13} /></button>
+                                
+                                <AnimatePresence>
+                                  {labelMenuOpenId === contact.id && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setLabelMenuOpenId(null); }} />
+                                      <motion.div
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        exit={{ opacity: 0, scale: 0.95 }}
+                                        className="absolute right-0 top-full mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden"
+                                      >
+                                        <div className="px-3 py-2 border-b border-gray-50 bg-gray-50/50">
+                                          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Select Labels</span>
+                                        </div>
+                                        <div className="max-h-60 overflow-y-auto py-1">
+                                          {workspaceLabels.map(lbl => {
+                                            const activeLabels = state.conversationLabels[contact.id] || [];
+                                            const isSelected = activeLabels.includes(lbl.id);
+                                            return (
+                                              <button
+                                                key={lbl.id}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  if (isSelected) setConversationLabels(contact.id, activeLabels.filter(id => id !== lbl.id));
+                                                  else setConversationLabels(contact.id, [...activeLabels, lbl.id]);
+                                                }}
+                                                className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                                              >
+                                                <div className="flex items-center gap-2">
+                                                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: LABEL_COLORS[lbl.color] }} />
+                                                  <span className="text-[12px] font-semibold text-gray-700">{lbl.name}</span>
+                                                </div>
+                                                {isSelected && <Check size={14} className="text-[#25D366]" />}
+                                              </button>
+                                            );
+                                          })}
+                                          {workspaceLabels.length === 0 && (
+                                            <div className="px-3 py-4 text-center text-xs text-gray-400">No labels.</div>
+                                          )}
+                                        </div>
+                                      </motion.div>
+                                    </>
+                                  )}
+                                </AnimatePresence>
                               </div>
                             )}
                           </div>

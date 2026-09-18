@@ -5,23 +5,29 @@
 import { NextResponse } from 'next/server';
 import { Message } from '@/types';
 
-// Global emitter set — listeners receive ALL incoming messages
-const globalEmitters = new Set<(data: { phoneNumber: string; message: Message; contactName?: string }) => void>();
+// Global emitter set partitioned by workspaceId
+const globalEmitters: Record<string, Set<(data: { phoneNumber: string; message: Message; contactName?: string; workspaceId: string }) => void>> = {};
 
 // Internal broadcast function
-export function broadcastGlobalMessage(phoneNumber: string, message: Message, contactName?: string) {
-  globalEmitters.forEach(emitter => {
-    try {
-      emitter({ phoneNumber, message, contactName });
-    } catch {
-      // Listener may have been closed
-    }
-  });
+export function broadcastGlobalMessage(phoneNumber: string, message: Message, workspaceId: string, contactName?: string) {
+  const emitters = globalEmitters[workspaceId];
+  if (emitters) {
+    emitters.forEach(emitter => {
+      try {
+        emitter({ phoneNumber, message, contactName, workspaceId });
+      } catch {
+        // Listener may have been closed
+      }
+    });
+  }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const workspaceId = searchParams.get('workspaceId') || 'sfmc-ws-1';
+
   const encoder = new TextEncoder();
-  let listener: ((data: { phoneNumber: string; message: Message; contactName?: string }) => void) | null = null;
+  let listener: ((data: { phoneNumber: string; message: Message; contactName?: string; workspaceId: string }) => void) | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
 
   const stream = new ReadableStream({
@@ -29,31 +35,33 @@ export async function GET() {
       // Send initial connection event
       controller.enqueue(encoder.encode(`: connected\n\n`));
 
-      listener = (data: { phoneNumber: string; message: Message; contactName?: string }) => {
+      listener = (data: { phoneNumber: string; message: Message; contactName?: string; workspaceId: string }) => {
         try {
           const eventData = JSON.stringify(data);
           controller.enqueue(encoder.encode(`data: ${eventData}\n\n`));
         } catch {
           console.warn('[global-stream] Could not enqueue to closed controller. Removing listener.');
-          if (listener) globalEmitters.delete(listener);
+          if (listener && globalEmitters[workspaceId]) globalEmitters[workspaceId].delete(listener);
         }
       };
 
-      globalEmitters.add(listener);
+      if (!globalEmitters[workspaceId]) {
+        globalEmitters[workspaceId] = new Set();
+      }
+      globalEmitters[workspaceId].add(listener);
 
-      // Send heartbeat every 30s to keep connection alive
       heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(`: heartbeat\n\n`));
         } catch {
           if (heartbeat) clearInterval(heartbeat);
-          if (listener) globalEmitters.delete(listener);
+          if (listener && globalEmitters[workspaceId]) globalEmitters[workspaceId].delete(listener);
         }
       }, 30000);
     },
     cancel() {
       if (heartbeat) clearInterval(heartbeat);
-      if (listener) globalEmitters.delete(listener);
+      if (listener && globalEmitters[workspaceId]) globalEmitters[workspaceId].delete(listener);
     }
   });
 
@@ -71,7 +79,8 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { phoneNumber, message, contactName } = body;
+    const { phoneNumber, message, contactName, workspaceId } = body;
+    const targetWsId = workspaceId || 'sfmc-ws-1';
 
     if (!phoneNumber || !message) {
       return NextResponse.json(
@@ -80,7 +89,7 @@ export async function POST(request: Request) {
       );
     }
 
-    broadcastGlobalMessage(phoneNumber, message, contactName);
+    broadcastGlobalMessage(phoneNumber, message, targetWsId, contactName);
 
     return NextResponse.json({
       success: true,

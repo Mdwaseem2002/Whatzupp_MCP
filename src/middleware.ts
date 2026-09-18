@@ -27,11 +27,6 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Redirect legacy auth routes to dashboard
-  if (pathname === '/login' || pathname === '/signup') {
-    return NextResponse.redirect(new URL('/', request.url));
-  }
-
   return NextResponse.next();
 }
 

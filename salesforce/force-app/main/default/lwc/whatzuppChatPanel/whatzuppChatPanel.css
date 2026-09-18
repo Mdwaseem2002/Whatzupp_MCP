@@ -506,6 +506,17 @@
     font-size: 18px;
 }
 
+.doc-link {
+    text-decoration: none !important;
+    color: inherit;
+    display: block;
+}
+
+.doc-link:hover .media-doc-box {
+    background: rgba(0, 0, 0, 0.08);
+    border-color: #00a884;
+}
+
 .media-doc-box {
     display: flex;
     align-items: center;
@@ -519,9 +530,31 @@
 }
 
 .doc-icon {
-    font-size: 18px;
+    font-size: 20px;
+}
+
+.doc-details {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
 }
 
 .doc-name {
     word-break: break-all;
+    color: #111b21;
+    font-weight: 600;
+}
+
+.doc-sub {
+    font-size: 10px;
+    color: #00a884;
+    font-weight: 600;
+    margin-top: 2px;
+}
+
+.doc-dl-icon {
+    font-size: 16px;
+    margin-left: auto;
+    opacity: 0.8;
 }

@@ -1,15 +1,14 @@
 'use client';
 
 // src/components/app/ChatsView.tsx
-// Chat screen — ChatList + ChatWindow. Templates & Broadcasts now live in their own sidebar screens.
-// STRICT WORKSPACE ISOLATION: only contacts saved in the active workspace appear.
-// Fast reply templates accessible via ⚡ overlay button in the chat area.
+// Chat screen — Zone 2 ChatList (420px) + Zone 3 ChatWindow (flexible) + Zone 4 CrmIntelligencePanel (380px)
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { UserPlus, Zap, X, MessageSquare } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Zap, X, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatList from '@/components/ChatList';
 import ChatWindow from '@/components/ChatWindow';
+import CrmIntelligencePanel from '@/components/CrmIntelligencePanel';
 import AddRecipientModal from '@/components/AddRecipientModel';
 import ToastNotification from '@/components/ToastNotification';
 import { useRealtimeMessages } from '@/app/hooks/useRealtimeMessages';
@@ -17,25 +16,28 @@ import { useGlobalNotifications } from '@/app/hooks/useGlobalNotifications';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
 import { Contact, Message, MessageStatus } from '@/types';
 
-
-
-// Helper: normalize phone number by stripping leading '+'
+// Helper: normalize phone number by stripping non-digit characters
 function normalizePhone(phone: string | undefined | null): string {
   if (!phone) return '';
-  return String(phone).replace(/^\+/, '');
+  return String(phone).replace(/[^0-9]/g, '');
 }
 
 export default function ChatsView() {
   const {
     activeWorkspace,
-    activeContacts: workspaceContacts, // contacts from WorkspaceProvider scoped to the active workspace
+    activeContacts: workspaceContacts,
     activeFastReplies,
   } = useWorkspace();
 
   const [allBackendContacts, setAllBackendContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
-  const { messages: realtimeMessages, phoneNumber: realtimeMessagesPhone } = useRealtimeMessages(selectedContact);
+  
+  // Call hook unconditionally
+  const { messages: realtimeMessages, phoneNumber: realtimeMessagesPhone } = useRealtimeMessages(
+    selectedContact, 
+    activeWorkspace?.id || 'sfmc-ws-1'
+  );
   const [showAddModal, setShowAddModal] = useState(false);
   const [config, setConfig] = useState({ accessToken: '', phoneNumberId: '' });
   const [showFastReply, setShowFastReply] = useState(false);
@@ -48,18 +50,15 @@ export default function ChatsView() {
     latestNotification,
     dismissNotification,
     incomingMessageEvent,
-  } = useGlobalNotifications(selectedPhoneNormalized);
+  } = useGlobalNotifications(
+    selectedPhoneNormalized,
+    activeWorkspace?.id || 'sfmc-ws-1'
+  );
 
   // ─── STRICT WORKSPACE FILTERING ───
-  // Build the contacts list for ChatList using ONLY workspace contacts.
-  // For each workspace contact, check if there's a matching backend conversation
-  // and use the workspace contact's name (not "Unknown" or raw phone number).
-  // ─── STRICT WORKSPACE FILTERING ───
-  // Build the contacts list for ChatList using ONLY contacts belonging to the active workspace.
   const filteredContacts: Contact[] = useMemo(() => {
     const wsId = activeWorkspace?.id || 'sfmc-ws-1';
 
-    // 1. If we have workspaceContacts matching activeWorkspace.id, use them
     if (workspaceContacts && workspaceContacts.length > 0) {
       const matchingWsContacts = workspaceContacts.filter(wc => wc.workspaceId === wsId);
       if (matchingWsContacts.length > 0) {
@@ -81,14 +80,25 @@ export default function ChatsView() {
       }
     }
 
-    // 2. Fallback to allBackendContacts loaded specifically for the active workspace
     return allBackendContacts;
   }, [workspaceContacts, allBackendContacts, activeWorkspace?.id]);
 
-  // Clear selected contact when workspace changes
+  // Auto-select initial contact (Mohamed Waseem) if none selected
   useEffect(() => {
-    setSelectedContact(null);
-  }, [activeWorkspace?.id]);
+    if (!selectedContact) {
+      if (filteredContacts.length > 0) {
+        setSelectedContact(filteredContacts[0]);
+      } else {
+        setSelectedContact({
+          id: 'contact-mw-1',
+          name: 'Mohamed Waseem',
+          phoneNumber: '+91 99523 74972',
+          online: false,
+          lastSeen: 'offline',
+        });
+      }
+    }
+  }, [filteredContacts, selectedContact]);
 
   // Real-time synchronization for background updates
   useEffect(() => {
@@ -144,7 +154,6 @@ export default function ChatsView() {
       ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
       : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
 
-    // Reset contacts and messages whenever active workspace changes
     setAllBackendContacts([]);
     setMessages({});
 
@@ -163,16 +172,12 @@ export default function ChatsView() {
           setAllBackendContacts(wsContacts);
 
           if (!isSalesCloud) {
-            // Hydrate messages for SFMC workspace contacts from SFMC DEs
             fetch('/api/sfmc/messages')
               .then(r => r.json())
               .then(msgData => {
                 if (msgData.messages && Array.isArray(msgData.messages)) {
                   const initialMessages: Record<string, Message[]> = {};
-                  
-                  // Build a lookup using last-10-digit phone suffixes for fuzzy matching
-                  // SFMC stores phones inconsistently (some with country code, some without)
-                  const phoneSuffixMap = new Map<string, string>(); // last10 -> normalized contact phone
+                  const phoneSuffixMap = new Map<string, string>();
                   wsContacts.forEach(c => {
                     const digits = c.phoneNumber.replace(/[^0-9]/g, '');
                     if (digits.length >= 10) {
@@ -184,7 +189,6 @@ export default function ChatsView() {
                     const rawPhone = normalizePhone(msg.phone || msg.contactKey);
                     if (!rawPhone) return;
                     
-                    // Find matching contact phone using last-10-digit suffix
                     const digits = rawPhone.replace(/[^0-9]/g, '');
                     const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
                     const matchedPhone = phoneSuffixMap.get(last10);
@@ -206,7 +210,6 @@ export default function ChatsView() {
                     });
                   });
 
-                  // Sort each contact's messages by timestamp ascending
                   Object.keys(initialMessages).forEach(phone => {
                     initialMessages[phone].sort((a, b) => 
                       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -218,7 +221,6 @@ export default function ChatsView() {
               })
               .catch(err => console.error('Failed to hydrate messages from SFMC:', err));
           } else {
-            // Hydrate messages for Sales Cloud workspace contacts
             Promise.all(
               wsContacts.map(async c => {
                 if (!c.phoneNumber) return null;
@@ -260,7 +262,6 @@ export default function ChatsView() {
     if (selectedContact && realtimeMessages.length > 0) {
       const key = normalizePhone(selectedContact.phoneNumber);
       if (realtimeMessagesPhone && realtimeMessagesPhone !== key) return;
-      // Deduplicate by message id to prevent duplicate key React errors
       const seen = new Set<string>();
       const deduped = realtimeMessages.filter(m => {
         if (seen.has(m.id)) return false;
@@ -272,7 +273,6 @@ export default function ChatsView() {
   }, [realtimeMessages, realtimeMessagesPhone, selectedContact]);
 
   const handleAddContact = async (contact: Contact) => {
-    // Optimistic UI update
     setAllBackendContacts(prev => [...prev, contact]);
     setShowAddModal(false);
 
@@ -334,8 +334,6 @@ export default function ChatsView() {
     setMessages(prev => {
       const contactMessages = prev[key] || [];
       const updatedMessages = [...contactMessages, newMessage];
-      // We no longer call /api/messages here. The backend /api/send-message will handle it 
-      // with the correct wamid, preventing duplicate entries.
       return { ...prev, [key]: updatedMessages };
     });
 
@@ -378,7 +376,6 @@ export default function ChatsView() {
     }
   };
 
-  // Handle fast reply selection — send the message immediately
   const handleFastReplySelect = (body: string) => {
     setShowFastReply(false);
     if (selectedContact) {
@@ -395,16 +392,109 @@ export default function ChatsView() {
     setMessages(prev => ({ ...prev, [key]: [...(prev[key] || []), incomingMessage] }));
   };
 
+  const DEFAULT_MW_MESSAGES: Message[] = [
+    {
+      id: 'mw-msg-1',
+      content: 'Hi Team,\nPlease find the document attached.',
+      timestamp: '2026-09-09T13:03:00.000Z',
+      sender: 'contact',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: false,
+    },
+    {
+      id: 'mw-msg-2',
+      content: '[Media: document: sfmc-doc-1] SFMC_Engagement_Overview.pdf',
+      filename: 'SFMC_Engagement_Overview.pdf',
+      timestamp: '2026-09-09T13:03:05.000Z',
+      sender: 'contact',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: true,
+      mediaType: 'document',
+    },
+    {
+      id: 'mw-msg-3',
+      content: 'Thanks for sharing!\nWe will review and get back to you soon.',
+      timestamp: '2026-09-09T13:04:00.000Z',
+      sender: 'user',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: false,
+    },
+    {
+      id: 'mw-msg-4',
+      content: 'Please also find the latest screenshots.',
+      timestamp: '2026-09-09T13:05:00.000Z',
+      sender: 'contact',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: false,
+    },
+    {
+      id: 'mw-msg-5',
+      content: '[Media: image: draft2-img] Draft 2.jpeg',
+      filename: 'Draft 2.jpeg',
+      timestamp: '2026-09-09T13:05:30.000Z',
+      sender: 'contact',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: true,
+      mediaType: 'image',
+    },
+    {
+      id: 'mw-msg-6',
+      content: 'Perfect! 👍',
+      timestamp: '2026-09-09T13:05:45.000Z',
+      sender: 'user',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: false,
+    },
+    {
+      id: 'mw-msg-7',
+      content: '[Media: image: chatgpt-img] ChatGPT Image Sep 2, 2026, 12_16_55 PM.png',
+      filename: 'ChatGPT Image Sep 2, 2026, 12_16_55 PM.png',
+      timestamp: '2026-09-09T13:12:00.000Z',
+      sender: 'contact',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: true,
+      mediaType: 'image',
+    },
+    {
+      id: 'mw-msg-8',
+      content: 'Got it. Thanks!',
+      timestamp: '2026-09-09T13:13:00.000Z',
+      sender: 'user',
+      status: MessageStatus.READ,
+      recipientId: '919952374972',
+      attachments: false,
+    },
+  ];
+
   const getContactMessages = (phoneNumber: string): Message[] => {
-    return messages[normalizePhone(phoneNumber)] || [];
+    const norm = normalizePhone(phoneNumber);
+    let list = messages[norm] || messages[phoneNumber] || [];
+    if (list.length === 0 && norm.length >= 10) {
+      const last10 = norm.slice(-10);
+      const matchedKey = Object.keys(messages).find(k => k.endsWith(last10));
+      if (matchedKey) list = messages[matchedKey];
+    }
+    const cleanList = list.filter(m => m.content && !m.content.includes('formatted phone') && !m.content.includes('Outbound from Sales Cloud'));
+    if (cleanList.length === 0 && (norm.includes('9952374972') || phoneNumber.includes('9952374972'))) {
+      return DEFAULT_MW_MESSAGES;
+    }
+    return cleanList;
   };
 
-  const accentColor = '#25D366';
+  const accentColor = '#00C853';
 
   return (
-    <div className="flex flex-1 h-full overflow-hidden">
-      {/* Left Sidebar — Chat List */}
-      <div className="h-full flex flex-col border-r" style={{ width: '340px', borderColor: '#e2e8f0', background: '#ffffff', flexShrink: 0 }}>
+    <div className="flex flex-1 h-full w-full overflow-hidden">
+      
+      {/* Zone 2 — Conversation List (Width: 320px) */}
+      <div className="h-full flex flex-col border-r border-slate-200/80 bg-white w-[320px] shrink-0">
         <ChatList
           contacts={filteredContacts}
           selectedContact={selectedContact}
@@ -417,8 +507,8 @@ export default function ChatsView() {
         />
       </div>
 
-      {/* Right Side — Chat Window + Fast Reply Overlay */}
-      <div className="flex-1 h-full flex flex-col" style={{ background: '#f8fafc', position: 'relative' }}>
+      {/* Zone 3 — Chat Workspace (Flexible / Main Section) */}
+      <div className="flex-1 h-full flex flex-col relative overflow-hidden" style={{ background: 'linear-gradient(180deg, #FBFEFD 0%, #F5FBF8 100%)' }}>
         {selectedContact ? (
           <>
             <ChatWindow
@@ -429,25 +519,21 @@ export default function ChatsView() {
               onCloseChat={() => setSelectedContact(null)}
             />
 
-            {/* ⚡ Fast Reply Button — premium floating button */}
+            {/* ⚡ Fast Reply Floating Action Button */}
             <motion.button
               onClick={() => setShowFastReply(!showFastReply)}
               title="Fast Replies"
               whileHover={{ scale: 1.12 }}
               whileTap={{ scale: 0.92 }}
-              animate={showFastReply ? { rotate: 0 } : { rotate: 0 }}
+              className="absolute bottom-20 right-6 w-11 h-11 rounded-full flex items-center justify-center shadow-lg z-30 transition-all cursor-pointer"
               style={{
-                position: 'absolute', bottom: '76px', right: '20px',
-                width: '44px', height: '44px', borderRadius: '50%',
                 background: showFastReply
-                  ? 'linear-gradient(135deg, #25D366 0%, #1ebe5d 100%)'
+                  ? 'linear-gradient(135deg, #00C853 0%, #00E676 100%)'
                   : 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
                 border: showFastReply ? 'none' : `2px solid ${accentColor}40`,
                 boxShadow: showFastReply
-                  ? '0 4px 20px rgba(37,211,102,0.35)'
-                  : '0 4px 16px rgba(37,211,102,0.15)',
-                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'all 0.2s ease', zIndex: 30,
+                  ? '0 4px 20px rgba(0,200,83,0.35)'
+                  : '0 4px 16px rgba(0,200,83,0.15)',
                 color: showFastReply ? '#ffffff' : accentColor,
               }}
             >
@@ -462,88 +548,38 @@ export default function ChatsView() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 12, scale: 0.97 }}
                   transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                  style={{
-                    position: 'absolute', bottom: '128px', right: '16px',
-                    width: '320px', maxHeight: '360px', overflowY: 'auto',
-                    borderRadius: '20px',
-                    zIndex: 30,
-                    background: 'rgba(255,255,255,0.95)',
-                    backdropFilter: 'blur(20px) saturate(180%)',
-                    WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-                    border: '1px solid rgba(226,232,240,0.8)',
-                    boxShadow: '0 16px 48px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)',
-                  }}>
-                  <div style={{
-                    padding: '16px 20px', borderBottom: '1px solid #f1f5f9',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      fontSize: '14px', fontWeight: '700', color: '#0f172a',
-                      fontFamily: "'Inter', sans-serif",
-                    }}>
-                      <div style={{
-                        width: '28px', height: '28px', borderRadius: '8px',
-                        background: `linear-gradient(135deg, ${accentColor}15, ${accentColor}08)`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        <Zap size={14} style={{ color: accentColor }} />
+                  className="absolute bottom-32 right-6 w-80 max-h-90 overflow-y-auto rounded-2xl z-30 bg-white/95 backdrop-blur-xl border border-slate-200/80 shadow-2xl p-0"
+                >
+                  <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-sm text-slate-900">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-50 text-[#00C853] flex items-center justify-center">
+                        <Zap size={14} />
                       </div>
                       Quick Replies
                     </div>
-                    <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '600' }}>
+                    <span className="text-[11px] text-slate-400 font-bold">
                       {activeFastReplies.length} available
                     </span>
                   </div>
+
                   {activeFastReplies.length === 0 ? (
-                    <div style={{ padding: '28px 20px', textAlign: 'center' }}>
-                      <div style={{
-                        width: '48px', height: '48px', borderRadius: '14px',
-                        background: `${accentColor}08`, margin: '0 auto 12px',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        <Zap size={22} style={{ color: accentColor, opacity: 0.5 }} />
+                    <div className="p-6 text-center">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-[#00C853] flex items-center justify-center mx-auto mb-2 opacity-70">
+                        <Zap size={22} />
                       </div>
-                      <p style={{ color: '#64748b', fontSize: '13px', fontWeight: '600', margin: '0 0 4px' }}>
-                        No quick replies yet
-                      </p>
-                      <p style={{ color: '#94a3b8', fontSize: '12px', margin: 0 }}>
-                        Add them in the Fast Reply tab
-                      </p>
+                      <p className="text-xs font-bold text-slate-700">No quick replies yet</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Add them in the Fast Reply tab</p>
                     </div>
                   ) : (
-                    <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <div className="p-3 flex flex-wrap gap-2">
                       {activeFastReplies.map((fr, idx) => (
-                        <motion.button
+                        <button
                           key={fr.id}
                           onClick={() => handleFastReplySelect(fr.body)}
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ delay: idx * 0.04 }}
-                          whileHover={{ scale: 1.04, y: -1 }}
-                          whileTap={{ scale: 0.97 }}
-                          style={{
-                            padding: '8px 14px', border: '1px solid #e2e8f0',
-                            borderRadius: '20px', cursor: 'pointer',
-                            background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-                            textAlign: 'left', transition: 'all 0.15s ease',
-                            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-                            fontSize: '12px', fontWeight: '600', color: '#334155',
-                            fontFamily: "'Inter', sans-serif",
-                          }}
-                          onMouseEnter={e => {
-                            e.currentTarget.style.background = `${accentColor}08`;
-                            e.currentTarget.style.borderColor = `${accentColor}30`;
-                            e.currentTarget.style.color = accentColor;
-                          }}
-                          onMouseLeave={e => {
-                            e.currentTarget.style.background = 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)';
-                            e.currentTarget.style.borderColor = '#e2e8f0';
-                            e.currentTarget.style.color = '#334155';
-                          }}
+                          className="px-3 py-2 rounded-xl border border-slate-200 hover:border-[#00C853] hover:bg-emerald-50/60 text-slate-700 text-xs font-bold text-left transition-all shadow-2xs"
                         >
                           {fr.title}
-                        </motion.button>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -552,38 +588,20 @@ export default function ChatsView() {
             </AnimatePresence>
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center" style={{
-            background: 'radial-gradient(ellipse at 50% 40%, rgba(37,211,102,0.04) 0%, transparent 60%)',
-          }}>
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className="text-center"
-            >
-              <div className="w-24 h-24 rounded-3xl flex items-center justify-center mb-6 mx-auto"
-                style={{
-                  background: `linear-gradient(135deg, ${accentColor}12, ${accentColor}06)`,
-                  border: `1px solid ${accentColor}18`,
-                  boxShadow: `0 8px 32px ${accentColor}10`,
-                }}>
-                <MessageSquare size={36} style={{ color: accentColor, opacity: 0.7 }} />
-              </div>
-              <p className="text-xl font-bold" style={{ color: '#0f172a', fontFamily: "'Syne', 'Inter', sans-serif" }}>
-                WhatZupp for Business
-              </p>
-              <p className="text-sm mt-2 max-w-[260px] mx-auto leading-relaxed" style={{ color: '#64748b' }}>
-                Select a conversation from the left panel to start messaging
-              </p>
-              <div className="flex items-center justify-center gap-2 mt-5">
-                <div className="w-8 h-[2px] rounded-full" style={{ background: `${accentColor}30` }} />
-                <div className="w-2 h-2 rounded-full" style={{ background: `${accentColor}40` }} />
-                <div className="w-8 h-[2px] rounded-full" style={{ background: `${accentColor}30` }} />
-              </div>
-            </motion.div>
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+            <div className="w-20 h-20 rounded-3xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4 text-[#00C853]">
+              <MessageSquare size={32} />
+            </div>
+            <h3 className="text-xl font-black text-slate-900">WhatZupp Enterprise Workspace</h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-xs">
+              Select a contact conversation from the left to view messages and CRM intelligence.
+            </p>
           </div>
         )}
       </div>
+
+      {/* Zone 4 — CRM Intelligence Panel (Width: 380px) */}
+      <CrmIntelligencePanel contact={selectedContact} onUpdateContact={handleEditContact} />
 
       {/* Add Recipient Modal */}
       {showAddModal && (

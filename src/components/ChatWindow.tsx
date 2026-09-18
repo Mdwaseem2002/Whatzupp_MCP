@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, ChevronLeft, MoreVertical, Search, Paperclip, Mic, Phone, Video, X, Info, Reply, Copy, Forward, Pin, Star, Trash2, Smile, Cloud, Zap, Loader2, Check } from 'lucide-react';
+import { Send, ChevronLeft, MoreVertical, Search, Paperclip, Mic, Phone, Video, X, Info, Reply, Copy, Forward, Pin, Star, Trash2, Smile, Cloud, Zap, Loader2, Check, Download, Tag, Plus } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import { Contact, Message, MessageStatus } from '@/types';
+import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
+import { LABEL_COLORS } from '@/types/workspace';
 
 interface ChatWindowProps {
   contact: Contact;
@@ -107,6 +109,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number; isSent: boolean } | null>(null);
+
+  const { state, setConversationLabels, viewLabelDetails } = useWorkspace();
+  const [showLabelPicker, setShowLabelPicker] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const activeLabels = state.conversationLabels[contact.id] || [];
+  const workspaceLabels = state.chatLabels.filter(l => l.workspaceId === state.activeWorkspaceId);
+
+  const toggleLabel = (labelId: string) => {
+    if (activeLabels.includes(labelId)) {
+      setConversationLabels(contact.id, activeLabels.filter(id => id !== labelId));
+    } else {
+      setConversationLabels(contact.id, [...activeLabels, labelId]);
+    }
+  };
 
   useEffect(() => {
     const handleGlobalClick = () => setContextMenu(null);
@@ -305,7 +321,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     <div className="flex flex-col h-full overflow-hidden bg-white relative font-sans">
 
       {/* ═══ CHAT HEADER — Glassmorphism ═══ */}
-      <div className="flex items-center px-5 py-3 border-b border-gray-200/60 z-10 shrink-0" style={{
+      <div className="flex items-center px-4 py-2 border-b border-gray-200/60 z-10 shrink-0" style={{
         background: 'linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(248,250,252,0.95) 100%)',
         backdropFilter: 'blur(20px) saturate(180%)',
         WebkitBackdropFilter: 'blur(20px) saturate(180%)',
@@ -315,21 +331,21 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           onClick={onCloseChat}
           whileHover={{ scale: 1.08 }}
           whileTap={{ scale: 0.95 }}
-          className="mr-3 rounded-xl p-1.5 text-gray-500 hover:bg-gray-100 transition-colors"
+          className="mr-2 rounded-lg p-1 text-gray-500 hover:bg-gray-100 transition-colors"
         >
-          <ChevronLeft size={22} />
+          <ChevronLeft size={18} />
         </motion.button>
 
         {/* Avatar with status ring */}
-        <div className="relative mr-3 shrink-0">
-          <div className={`w-11 h-11 flex items-center justify-center rounded-full text-white font-bold text-sm shadow-md
-            ${isOnline ? 'ring-[2.5px] ring-[#25D366]/30 ring-offset-2 ring-offset-white' : ''}
+        <div className="relative mr-2.5 shrink-0">
+          <div className={`w-9 h-9 flex items-center justify-center rounded-full text-white font-bold text-xs shadow-sm
+            ${isOnline ? 'ring-[2px] ring-[#25D366]/30 ring-offset-1 ring-offset-white' : ''}
             bg-gradient-to-br from-[#25D366] to-[#128C7E]
           `}>
             {initials}
           </div>
           {isOnline && (
-            <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#25D366] border-[2.5px] border-white">
+            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#25D366] border-[2px] border-white">
               <motion.span
                 animate={{ scale: [1, 1.6, 1], opacity: [0.6, 0, 0.6] }}
                 transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
@@ -339,28 +355,121 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           )}
         </div>
 
-        <div className="flex-1 min-w-0">
-          <h2 className="text-[16px] font-bold text-gray-900 truncate">{contact.name}</h2>
-          <p className="text-[12px] font-medium">
-            {mounted ? (
+        <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <h2 className="text-sm font-extrabold text-gray-900 truncate leading-tight flex items-center gap-2">
+            {contact.name}
+          </h2>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {activeLabels.map(labelId => {
+              const lbl = workspaceLabels.find(l => l.id === labelId);
+              if (!lbl) return null;
+              return (
+                <button 
+                  key={labelId} 
+                  onClick={() => viewLabelDetails(labelId)}
+                  className="px-1.5 py-0.5 text-[9px] font-extrabold text-white rounded-md tracking-wide flex items-center gap-1 shadow-sm hover:opacity-80 transition-opacity cursor-pointer" 
+                  style={{ backgroundColor: LABEL_COLORS[lbl.color] }}
+                >
+                  {lbl.name}
+                </button>
+              );
+            })}
+            {mounted && activeLabels.length === 0 && (
               isOnline
-                ? <span className="text-[#25D366] font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#25D366] inline-block" /> Online</span>
-                : <span className="text-gray-400">Last seen {formatLastSeen(contact.lastSeen)}</span>
-            ) : null}
-          </p>
+                ? <span className="text-[#25D366] text-[11px] font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#25D366] inline-block" /> Online</span>
+                : <span className="text-gray-400 text-[11px] font-medium">Last seen {formatLastSeen(contact.lastSeen)}</span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-0.5">
-          {[Video, Phone, Search, MoreVertical].map((Icon, i) => (
+          {[Video, Phone, Search].map((Icon, i) => (
             <motion.button
               key={i}
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.95 }}
-              className="p-2.5 rounded-xl text-gray-500 hover:text-[#25D366] hover:bg-[#25D366]/[0.06] transition-all"
+              className="p-1.5 rounded-lg text-gray-500 hover:text-[#25D366] hover:bg-[#25D366]/[0.06] transition-all"
             >
-              <Icon size={19} />
+              <Icon size={16} />
             </motion.button>
           ))}
+          <div className="relative">
+            <motion.button
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.95 }}
+              className={`p-1.5 rounded-lg transition-all ${showMoreMenu ? 'text-[#25D366] bg-[#25D366]/[0.06]' : 'text-gray-500 hover:text-[#25D366] hover:bg-[#25D366]/[0.06]'}`}
+            >
+              <MoreVertical size={16} />
+            </motion.button>
+            <AnimatePresence>
+              {showMoreMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 5, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 z-50 py-1"
+                  >
+                    <div className="relative group">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setShowLabelPicker(!showLabelPicker); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-gray-50 text-gray-700 text-[13px] font-semibold transition-colors text-left"
+                      >
+                        <Tag size={14} className="text-gray-400" />
+                        Labels
+                      </button>
+                      
+                      <AnimatePresence>
+                        {showLabelPicker && (
+                          <motion.div
+                            initial={{ opacity: 0, x: 5 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 5 }}
+                            className="absolute top-0 right-full mr-2 w-48 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden"
+                          >
+                            <div className="px-3 py-2 border-b border-gray-50 bg-gray-50/50 flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Select Labels</span>
+                            </div>
+                            <div className="max-h-60 overflow-y-auto py-1">
+                              {workspaceLabels.map(lbl => (
+                                <button
+                                  key={lbl.id}
+                                  onClick={(e) => { e.stopPropagation(); toggleLabel(lbl.id); }}
+                                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: LABEL_COLORS[lbl.color] }} />
+                                    <span className="text-[12px] font-semibold text-gray-700 truncate">{lbl.name}</span>
+                                  </div>
+                                  {activeLabels.includes(lbl.id) && <Check size={14} className="text-[#25D366] shrink-0" />}
+                                </button>
+                              ))}
+                              {workspaceLabels.length === 0 && (
+                                <div className="px-3 py-4 text-center text-xs text-gray-400">No labels.</div>
+                              )}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <button 
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        // Add delete logic here if needed
+                      }}
+                      className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-red-50 text-red-600 text-[13px] font-semibold transition-colors text-left"
+                    >
+                      <Trash2 size={14} className="text-red-500" />
+                      Delete Chat
+                    </button>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
 
@@ -440,35 +549,54 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   }
                 }
 
-                // Determine effective media type, embedded mediaId, and media source
-                const matchMedia = rawText.match(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i) || rawText.match(/\[(image|video|document|audio)(?::\s*([^\s\]]+))?\]/i);
-                let effectiveType = message.mediaType;
-                if (!effectiveType || effectiveType === 'text') {
-                  if (matchMedia) effectiveType = matchMedia[1].toLowerCase() as any;
-                }
+                // Enhanced Media & Image Attachment Detection
+                const isImageAttachment = 
+                  message.mediaType === 'image' || 
+                  message.mediaType === 'sticker' ||
+                  /\[(?:Media:\s*)?image/i.test(rawText) ||
+                  /📷|Image Attachment|\.(png|jpe?g|webp|gif|svg)/i.test(rawText);
 
-                const extractedMediaId = message.mediaId || (matchMedia ? matchMedia[2] : null);
-                const isImage = effectiveType === 'image' || effectiveType === 'sticker';
-                const isVideo = effectiveType === 'video';
-                const isDocument = effectiveType === 'document';
-                const isAudio = effectiveType === 'audio';
+                const isVideoAttachment = 
+                  message.mediaType === 'video' || 
+                  /\[(?:Media:\s*)?video/i.test(rawText) ||
+                  /🎥|Video Attachment|\.(mp4|mov|webm)/i.test(rawText);
+
+                const isDocAttachment = 
+                  message.mediaType === 'document' || 
+                  /\[(?:Media:\s*)?document/i.test(rawText) ||
+                  /📄|Document Attachment|\.(pdf|docx?|xlsx?|pptx?|zip|csv)/i.test(rawText);
+
+                const extractedMediaId = message.mediaId;
+                const isImage = isImageAttachment;
+                const isVideo = isVideoAttachment;
+                const isDocument = isDocAttachment;
+                const isAudio = message.mediaType === 'audio';
 
                 const mediaSrc = message.mediaUrl || (extractedMediaId ? `/api/media?mediaId=${extractedMediaId}` : null);
-                const fallbackImgSrc = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80';
-                const fallbackVideoPoster = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?w=600&auto=format&fit=crop&q=80';
-                const captionText = matchMedia ? rawText.replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]\s*/i, '').trim() : rawText;
+                const fallbackImgSrc = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';
+                const fallbackVideoPoster = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?w=800&auto=format&fit=crop&q=80';
+                
+                // Clean display text by stripping technical tags
+                let cleanDisplayText = rawText
+                  .replace(/\[(?:Media:\s*)?(image|video|document|audio)(?::\s*[^\s\]]+)?\]/gi, '')
+                  .replace(/📷|🎥|📄|🎙️/g, '')
+                  .trim();
+
+                // Extract filename if present
+                const fileNameMatch = rawText.match(/(?:Draft\s*\d+\.[a-z]+|ChatGPT\s*Image[^\.\n]+\.[a-z]+|[a-zA-Z0-9_\-\s]+\.(?:jpeg|jpg|png|webp|gif|pdf|docx|xlsx|csv))/i);
+                const displayFileName = message.filename || (fileNameMatch ? fileNameMatch[0] : 'Media Attachment');
 
                 return (
                   <motion.div
                     initial={{ opacity: 0, y: 8, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    transition={{ duration: 0.25, delay: index * 0.02 }}
+                    transition={{ duration: 0.2, delay: index * 0.02 }}
                     key={message.id}
                     className={`flex ${isSent ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-3' : 'mt-0.5'}`}
                   >
                     {/* Avatar for received — only on first of group */}
                     {!isSent && isFirstInGroup && (
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#25D366] to-[#128C7E] flex items-center justify-center text-white text-[10px] font-bold shrink-0 mr-2 mt-1 shadow-sm">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#128C7E] to-[#25D366] flex items-center justify-center text-white text-[10px] font-black shrink-0 mr-2 mt-1 shadow-sm ring-2 ring-emerald-500/10">
                         {initials}
                       </div>
                     )}
@@ -482,20 +610,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       <div className="flex flex-col">
                         {/* ─── The Bubble ─── */}
                         <div
-                          className="relative px-3.5 py-2 transition-all"
+                          className="relative px-4 py-3 transition-all font-sans"
                           style={{
                             background: isSent
-                              ? 'linear-gradient(135deg, #25D366 0%, #1ebe5d 50%, #17a34a 100%)'
-                              : 'linear-gradient(135deg, #ffffff 0%, #fafbfc 100%)',
-                            borderRadius: '18px',
-                            borderTopRightRadius: isSent && isFirstInGroup ? '4px' : '18px',
-                            borderTopLeftRadius: !isSent && isFirstInGroup ? '4px' : '18px',
-                            borderBottomRightRadius: isSent && !isLastInGroup ? '6px' : '18px',
-                            borderBottomLeftRadius: !isSent && !isLastInGroup ? '6px' : '18px',
-                            border: isSent ? 'none' : '1px solid #e5e7eb',
+                              ? 'linear-gradient(135deg, #DDFBE7 0%, #C7F7D5 100%)'
+                              : '#FFFFFF',
+                            borderRadius: '24px',
+                            borderTopRightRadius: isSent && isFirstInGroup ? '6px' : '24px',
+                            borderTopLeftRadius: !isSent && isFirstInGroup ? '6px' : '24px',
+                            border: isSent ? '1px solid rgba(0, 200, 83, 0.2)' : '1px solid #E2E8F0',
                             boxShadow: isSent
-                              ? '0 2px 8px rgba(37,211,102,0.22), 0 1px 3px rgba(37,211,102,0.12)'
-                              : '0 1px 4px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.03)',
+                              ? '0 4px 16px rgba(0,200,83,0.06)'
+                              : '0 4px 16px rgba(15,23,42,0.04)',
                           }}
                         >
                           {/* Context Menu Trigger */}
@@ -503,7 +629,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                             <button
                               onClick={(e) => openContextMenu(e, message.id, isSent)}
                               className={`absolute -top-1 ${isSent ? '-left-8' : '-right-8'} w-7 h-7 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all z-10 shadow-sm hover:scale-110
-                                bg-white/90 backdrop-blur-sm border border-gray-200 text-gray-500 hover:text-gray-700
+                                bg-white/95 backdrop-blur-sm border border-slate-200 text-slate-500 hover:text-slate-800
                               `}
                             >
                               <MoreVertical size={14} />
@@ -513,81 +639,65 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           <div className="break-words relative flex flex-col">
                             {/* Quote */}
                             {hasQuote && quoteText && (
-                              <div className={`mt-1 mb-2 rounded-xl p-2.5 border-l-[3px] border-[#25D366] ${isSent ? 'bg-black/10' : 'bg-[#25D366]/5'}`}>
-                                <p className="text-[12px] font-bold mb-0.5" style={{ color: isSent ? '#ffffff' : '#25D366' }}>{isSent ? 'You' : contact.name}</p>
-                                <p className="text-[13px] opacity-90 line-clamp-2 leading-snug" style={{ color: isSent ? '#ffffff' : '#4b5563' }}>{quoteText}</p>
+                              <div className={`mt-1 mb-2 rounded-xl p-2.5 border-l-[3px] border-[#00C853] ${isSent ? 'bg-emerald-950/10' : 'bg-emerald-50'}`}>
+                                <p className="text-[11px] font-extrabold mb-0.5 text-[#00C853]">{isSent ? 'You' : contact.name}</p>
+                                <p className="text-[12px] opacity-90 line-clamp-2 leading-snug font-medium text-slate-700">{quoteText}</p>
                               </div>
                             )}
 
-                            {/* ─── Media: Image ─── */}
-                            {isImage && (
-                              <div className="relative group/media my-1 flex flex-col">
-                                <img
-                                  src={mediaSrc || fallbackImgSrc}
-                                  alt="Image Attachment"
-                                  className="rounded-xl object-cover max-w-xs cursor-pointer shadow-sm max-h-[300px] hover:brightness-95 transition-all"
-                                  onClick={() => window.open(mediaSrc || fallbackImgSrc, '_blank')}
-                                />
-                              </div>
-                            )}
-
-                            {/* ─── Media: Video ─── */}
-                            {isVideo && (
-                              <div className="relative group/media my-1 flex flex-col">
-                                {mediaSrc ? (
-                                  <video src={mediaSrc} controls className="rounded-xl max-w-xs shadow-sm max-h-[280px]" />
-                                ) : (
-                                  <div
-                                    className="relative overflow-hidden rounded-xl cursor-pointer max-w-xs shadow-sm group/vid"
-                                    onClick={() => window.open(fallbackVideoPoster, '_blank')}
-                                  >
-                                    <img src={fallbackVideoPoster} alt="Video Preview" className="w-full h-44 object-cover brightness-75 group-hover/vid:brightness-90 transition-all" />
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                      <div className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white text-lg pl-0.5 shadow-lg group-hover/vid:scale-110 transition-transform">
-                                        ▶
-                                      </div>
-                                    </div>
+                            {/* ─── Media & Attachment Card (PDF / Image / File) ─── */}
+                            {(isDocument || isImage || isVideo) && (
+                              <div className="bg-white rounded-[24px] border border-slate-100 shadow-[0_4px_16px_rgba(15,23,42,0.04)] p-3.5 flex items-center justify-between gap-3.5 min-w-[280px] sm:min-w-[320px] my-1">
+                                <div className="flex items-center gap-3.5 min-w-0">
+                                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 text-xl font-bold shadow-2xs ${
+                                    displayFileName.endsWith('.pdf') || isDocument
+                                      ? 'bg-rose-50 text-rose-500 border border-rose-100'
+                                      : 'bg-emerald-50 text-[#00C853] border border-emerald-100'
+                                  }`}>
+                                    {displayFileName.endsWith('.pdf') ? '📄' : '🖼️'}
                                   </div>
-                                )}
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-xs font-bold text-slate-900 truncate tracking-tight">{displayFileName}</span>
+                                    <span className="text-[11px] text-slate-400 font-semibold mt-0.5">
+                                      {displayFileName.endsWith('.pdf') ? '2.4 MB • PDF' : displayFileName.endsWith('.png') ? '2.1 MB • PNG' : '1.8 MB • JPG'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <a
+                                  href={mediaSrc || '#'}
+                                  download
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="w-9 h-9 rounded-full bg-slate-50 hover:bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 transition-all shrink-0 shadow-2xs"
+                                  title="Download Attachment"
+                                >
+                                  <Download size={16} />
+                                </a>
                               </div>
                             )}
 
-                            {/* ─── Media: Document ─── */}
-                            {isDocument && (
-                              <div className={`my-1 p-3 rounded-xl flex items-center gap-3 border ${isSent ? 'bg-black/10 border-white/20 text-white' : 'bg-gray-100 border-gray-200 text-gray-800'}`}>
-                                <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-xl shrink-0">
-                                  📄
-                                </div>
-                                <div className="flex flex-col min-w-0 flex-1">
-                                  <span className="text-xs font-bold truncate">{message.filename || 'Document Attachment'}</span>
-                                  <span className="text-[10px] opacity-75">File</span>
-                                </div>
-                                {mediaSrc && (
-                                  <a href={mediaSrc} download target="_blank" rel="noreferrer" className="text-xs font-bold underline ml-2">
-                                    Download
-                                  </a>
-                                )}
-                              </div>
-                            )}
-
-                            {/* ─── Text / Caption Content ─── */}
+                            {/* ─── Text Content ─── */}
                             {(!isImage && !isVideo && !isDocument && !isAudio) ? (
-                              <span className="text-[15px] leading-relaxed pr-[4.5rem]" style={{ color: isSent ? '#ffffff' : '#111827' }}>
-                                {rawText}
+                              <span className="text-[14px] font-medium leading-relaxed pr-[4.5rem] whitespace-pre-line text-slate-900">
+                                {cleanDisplayText || rawText}
                               </span>
-                            ) : captionText ? (
-                              <span className="text-[14px] leading-relaxed mt-1 pr-[4.5rem]" style={{ color: isSent ? '#ffffff' : '#111827' }}>
-                                {captionText}
+                            ) : cleanDisplayText ? (
+                              <span className="text-[13px] font-medium leading-relaxed mt-1 pr-[4.5rem] whitespace-pre-line text-slate-900">
+                                {cleanDisplayText}
                               </span>
                             ) : null}
 
-                            {/* Timestamp + Status */}
-                            <div className="absolute right-0 bottom-0 flex items-end gap-1 px-1 py-0.5">
-                              {mods.starred && <Star size={11} className={isSent ? 'fill-white/80 text-white/80' : 'fill-gray-400 text-gray-400'} />}
-                              <span className="text-[10px] font-medium tracking-wide" style={{ color: isSent ? 'rgba(255,255,255,0.8)' : '#9ca3af' }}>
+                            {/* Timestamp + Green Double Checkmark Status */}
+                            <div className="absolute right-0 bottom-0 flex items-center gap-1 px-1 py-0.5">
+                              {mods.starred && <Star size={11} className={isSent ? 'fill-emerald-800 text-emerald-800' : 'fill-gray-400 text-gray-400'} />}
+                              <span className="text-[10px] font-medium tracking-wide" style={{ color: isSent ? '#047857' : '#94A3B8' }}>
                                 {mounted ? formatMessageTime(message.timestamp) : ''}
                               </span>
-                              {isSent && <div className="ml-0.5 leading-none">{getStatusIcon(message.status, isSent)}</div>}
+                              {isSent && (
+                                <span className="text-[#00C853] font-black text-xs ml-0.5 tracking-tighter leading-none select-none">
+                                  ✔✔
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>

@@ -5,11 +5,13 @@ import type {
   Workspace,
   UserProfile,
   WorkspaceContact,
-  FastReplyTemplate,
   AppScreen,
   ThemeMode,
   AppState,
+  ChatLabel,
+  SavedList,
 } from '@/types/workspace';
+import { SYSTEM_LABELS } from '@/types/workspace';
 
 interface WorkspaceContextValue {
   state: AppState;
@@ -34,6 +36,11 @@ interface WorkspaceContextValue {
   activeFastReplies: FastReplyTemplate[];
   setActiveScreen: (screen: AppScreen) => void;
   setTheme: (theme: ThemeMode) => void;
+  addChatLabel: (label: Omit<ChatLabel, 'id' | 'createdAt'>) => Promise<ChatLabel>;
+  updateChatLabel: (id: string, updates: Partial<ChatLabel>) => Promise<void>;
+  deleteChatLabel: (id: string) => Promise<void>;
+  setConversationLabels: (conversationId: string, labelIds: string[]) => Promise<void>;
+  viewLabelDetails: (id: string | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -70,6 +77,15 @@ const DEFAULT_WORKSPACES: Workspace[] = [
   },
 ];
 
+const seededChatLabels = DEFAULT_WORKSPACES.flatMap(ws => 
+  SYSTEM_LABELS.map(label => ({
+    ...label,
+    id: `label-${ws.id}-${label.name.toLowerCase().replace(/\s+/g, '-')}`,
+    workspaceId: ws.id,
+    createdAt: new Date().toISOString()
+  }))
+);
+
 const DEFAULT_STATE: AppState = {
   onboardingComplete: true,
   profile: null,
@@ -79,6 +95,10 @@ const DEFAULT_STATE: AppState = {
   activeWorkspaceId: 'salescloud-ws-1',
   activeScreen: 'dashboard',
   theme: 'light',
+  chatLabels: seededChatLabels,
+  savedLists: [],
+  conversationLabels: {},
+  activeLabelId: null,
 };
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
@@ -91,8 +111,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const cachedWsStr = localStorage.getItem('wz_cached_workspaces');
       const savedWsId = localStorage.getItem('wz_active_workspace');
       const savedScreen = localStorage.getItem('wz_active_screen') as AppScreen | null;
+      const cachedChatLabels = localStorage.getItem('wz_cached_chat_labels');
+      const cachedConversationLabels = localStorage.getItem('wz_cached_conversation_labels');
 
-      if (cachedWsStr || savedWsId || savedScreen) {
+      if (cachedWsStr || savedWsId || savedScreen || cachedChatLabels || cachedConversationLabels) {
         setState(prev => {
           let workspaces = prev.workspaces;
           if (cachedWsStr) {
@@ -103,12 +125,24 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             ? savedWsId
             : (workspaces[0]?.id || 'salescloud-ws-1');
           const activeScreen = savedScreen || prev.activeScreen;
+          
+          let parsedChatLabels = prev.chatLabels;
+          if (cachedChatLabels) {
+            try { parsedChatLabels = JSON.parse(cachedChatLabels); } catch(e) {}
+          }
+          
+          let parsedConversationLabels = prev.conversationLabels;
+          if (cachedConversationLabels) {
+            try { parsedConversationLabels = JSON.parse(cachedConversationLabels); } catch(e) {}
+          }
 
           return {
             ...prev,
             workspaces,
             activeWorkspaceId,
             activeScreen,
+            chatLabels: parsedChatLabels,
+            conversationLabels: parsedConversationLabels,
           };
         });
       }
@@ -161,6 +195,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
               onboardingComplete: true,
               activeWorkspaceId: targetWsId,
               activeScreen: targetScreen,
+              chatLabels: prev.chatLabels?.length ? prev.chatLabels : seededChatLabels,
+              savedLists: prev.savedLists || [],
+              conversationLabels: prev.conversationLabels || {},
             };
           });
         }
@@ -179,6 +216,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       document.documentElement.setAttribute('data-theme', state.theme);
     }
   }, [state.theme]);
+
+  // Persist Labels
+  useEffect(() => {
+    if (isReady && typeof window !== 'undefined') {
+      localStorage.setItem('wz_cached_chat_labels', JSON.stringify(state.chatLabels));
+      localStorage.setItem('wz_cached_conversation_labels', JSON.stringify(state.conversationLabels));
+    }
+  }, [state.chatLabels, state.conversationLabels, isReady]);
 
   // Mutations
   const setProfile = useCallback(async (profile: UserProfile) => {
@@ -240,6 +285,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('wz_active_workspace', id);
     }
     setState(prev => ({ ...prev, activeWorkspaceId: id }));
+  }, []);
+
+  const viewLabelDetails = useCallback((id: string | null) => {
+    setState(prev => ({ ...prev, activeLabelId: id, activeScreen: id ? 'labels' : prev.activeScreen }));
   }, []);
 
   const activeWorkspace = useMemo(() => {
@@ -340,14 +389,58 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, theme }));
   }, []);
 
+  // Labels
+  const addChatLabel = useCallback(async (label: Omit<ChatLabel, 'id' | 'createdAt'>) => {
+    const newLabel: ChatLabel = {
+      ...label,
+      id: `label-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+    setState(prev => ({ ...prev, chatLabels: [...prev.chatLabels, newLabel] }));
+    return newLabel;
+  }, []);
+
+  const updateChatLabel = useCallback(async (id: string, updates: Partial<ChatLabel>) => {
+    setState(prev => ({
+      ...prev,
+      chatLabels: prev.chatLabels.map(l => l.id === id ? { ...l, ...updates } : l)
+    }));
+  }, []);
+
+  const deleteChatLabel = useCallback(async (id: string) => {
+    setState(prev => ({
+      ...prev,
+      chatLabels: prev.chatLabels.filter(l => l.id !== id),
+      // Clean up conversationLabels containing this id
+      conversationLabels: Object.fromEntries(
+        Object.entries(prev.conversationLabels).map(([convId, labels]) => [
+          convId,
+          labels.filter(l => l !== id)
+        ])
+      )
+    }));
+  }, []);
+
+  const setConversationLabels = useCallback(async (conversationId: string, labelIds: string[]) => {
+    setState(prev => ({
+      ...prev,
+      conversationLabels: {
+        ...prev.conversationLabels,
+        [conversationId]: labelIds
+      }
+    }));
+  }, []);
+
   const value: WorkspaceContextValue = useMemo(() => ({
     state, isReady, setProfile, completeOnboarding, addWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace, activeWorkspace,
     addContact, updateContact, deleteContact, activeContacts, allContacts, getWorkspaceForPhone, isPhoneVisibleInActiveWorkspace,
     addFastReply, updateFastReply, deleteFastReply, activeFastReplies, setActiveScreen, setTheme,
+    addChatLabel, updateChatLabel, deleteChatLabel, setConversationLabels, viewLabelDetails,
   }), [
     state, isReady, setProfile, completeOnboarding, addWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace, activeWorkspace,
     addContact, updateContact, deleteContact, activeContacts, allContacts, getWorkspaceForPhone, isPhoneVisibleInActiveWorkspace,
     addFastReply, updateFastReply, deleteFastReply, activeFastReplies, setActiveScreen, setTheme,
+    addChatLabel, updateChatLabel, deleteChatLabel, setConversationLabels, viewLabelDetails,
   ]);
 
   return (

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { writeSentMessage } from '@/lib/sfmcDE';
+import { normalizePhoneNumber } from '@/utils/phone';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,6 +22,11 @@ export async function POST(request: Request) {
     const headerWsId = request.headers.get('x-workspace-id') || request.headers.get('X-Workspace-Id');
     let targetWorkspaceId = bodyWsId || headerWsId;
 
+    const authHeader = request.headers.get('authorization');
+    const headerToken = (authHeader && authHeader.startsWith('Bearer ')) ? authHeader.substring(7).trim() : null;
+    const accessToken = headerToken || body.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || body.phoneNumberId;
+
     if (!targetWorkspaceId && to) {
       try {
         const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
@@ -39,12 +45,18 @@ export async function POST(request: Request) {
       const { workspaceRegistry } = await import('@/lib/connectors/workspaceRegistry');
       const connector = workspaceRegistry.getConnector(targetWorkspaceId);
       if (connector) {
-        const formattedPhone = to.replace('+', '');
+        const formattedPhone = normalizePhoneNumber(to);
         const result = await connector.sendMessage({
           recipientPhone: formattedPhone,
           content: message || '',
           salesforceRecordId: body.salesforceRecordId,
           salesforceObjectType: body.salesforceObjectType,
+          accessToken: accessToken || undefined,
+          phoneNumberId: phoneNumberId || undefined,
+          mediaId: mediaId || undefined,
+          mediaType: mediaType || undefined,
+          mimeType: mimeType || undefined,
+          filename: filename || undefined,
         });
 
         // Broadcast SSE for real-time UI updates
@@ -67,7 +79,7 @@ export async function POST(request: Request) {
             'Content-Type': 'application/json',
             'x-internal-secret': process.env.JWT_SECRET || 'fallback-secret',
           },
-          body: JSON.stringify({ phoneNumber: formattedPhone, message: sentMessageData }),
+          body: JSON.stringify({ phoneNumber: formattedPhone, message: sentMessageData, workspaceId: targetWorkspaceId }),
         }).catch(err => console.error('[send-message] SSE per-phone emit failed:', err));
 
         // Global SSE stream
@@ -92,10 +104,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const authHeader = request.headers.get('authorization');
-    const headerToken = (authHeader && authHeader.startsWith('Bearer ')) ? authHeader.substring(7).trim() : null;
-    const accessToken = headerToken || body.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || body.phoneNumberId;
+
 
     if (!to || (!message && !mediaId) || !accessToken || !phoneNumberId) {
       return NextResponse.json(
@@ -104,8 +113,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Format the phone number to remove '+' if present, as WhatsApp API expects it without '+'
-    const formattedPhone = to.replace('+', '');
+    // Format the phone number to remove spaces and '+', ensuring consistency
+    const formattedPhone = normalizePhoneNumber(to);
 
     // Construct Meta payload
     const payload: any = {
@@ -221,6 +230,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           phoneNumber: formattedPhone,
           message: sentMessageData,
+          workspaceId: targetWorkspaceId
         }),
       }).catch(err => console.error('[send-message] SSE per-phone emit failed:', err));
 

@@ -262,10 +262,15 @@ function normalizeTimestamp(raw: string): string {
     content: string;
     salesforceRecordId?: string;
     salesforceObjectType?: string;
+    accessToken?: string;
+    phoneNumberId?: string;
   }): Promise<{ messageId: string; status: string }> {
+    // 1. Send via WhatsApp Meta API
     const waResult = await sendWhatsAppMessage({
       to: params.recipientPhone,
       message: params.content,
+      accessToken: params.accessToken,
+      phoneNumberId: params.phoneNumberId,
     });
 
     const wamid = waResult.messageId || `wamid.${Date.now()}`;

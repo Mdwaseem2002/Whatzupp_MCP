@@ -24,6 +24,7 @@ export interface WorkspaceContactResult {
   email?: string;
   company?: string;
   lastSyncedAt: string;
+  labels?: string; // comma-separated label names stored in Salesforce WhatZupp_Labels__c
 }
 
 export interface FieldMappingSchema {
@@ -51,6 +52,12 @@ export interface Connector {
     content: string;
     salesforceRecordId?: string;
     salesforceObjectType?: string;
+    accessToken?: string;
+    phoneNumberId?: string;
+    mediaId?: string;
+    mediaType?: string;
+    mimeType?: string;
+    filename?: string;
   }): Promise<{ messageId: string; status: string }>;
 
   findContact(params: {
@@ -68,11 +75,12 @@ export interface Connector {
     phoneNumber: string;
     email?: string;
     company?: string;
+    labels?: string;
   }): Promise<WorkspaceContactResult>;
 
   updateContact(
     id: string,
-    updates: { name?: string; phoneNumber?: string; email?: string; company?: string }
+    updates: { name?: string; phoneNumber?: string; email?: string; company?: string; labels?: string }
   ): Promise<boolean>;
 
   deleteContact(id: string): Promise<boolean>;

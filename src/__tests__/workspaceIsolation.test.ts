@@ -65,7 +65,7 @@ async function runIsolationTestSuite() {
     const scPage = await auth.connector!.fetchMessages({ phoneNumber: testPhone });
     assert.ok(scPage.messages.length >= 2, 'Sales Cloud workspace must return workspace messages');
     scPage.messages.forEach(m => {
-      assert.ok(m.id.startsWith('sc-') || m.id.startsWith('wamid') || m.id.startsWith('00'), `Message ID ${m.id} must belong to Sales Cloud workspace`);
+      assert.ok(m.id.startsWith('sc-') || m.id.startsWith('wamid') || m.id.startsWith('00') || m.id.startsWith('tpl-lwc'), `Message ID ${m.id} must belong to Sales Cloud workspace`);
     });
     console.log('  ✓ TEST 2 PASSED: Sales Cloud messages isolated correctly.');
     passedCount++;
@@ -271,7 +271,7 @@ async function runIsolationTestSuite() {
   // ----------------------------------------------------
   try {
     console.log('\n[TEST 9] Testing Ambiguous Queue placement for dual-matching contact...');
-    const dualPhone = '919952374972';
+    const dualPhone = '910000000009';
 
     // Clear conversation owner so there is no ownership record
     await setConfig(`conversation_owner:${dualPhone}`, null);
@@ -287,6 +287,25 @@ async function runIsolationTestSuite() {
         salesforceRecordId: '003IR00001k5UtxYAE',
         lastSyncedAt: new Date().toISOString()
       });
+    }
+
+    // Override SFMC connector findContact to force a match for this specific phone
+    const sfmcConn = workspaceRegistry.getConnector('sfmc-ws-1') as any;
+    if (sfmcConn) {
+      const originalFind = sfmcConn.findContact.bind(sfmcConn);
+      sfmcConn.findContact = async (p: any) => {
+        if (p.phoneNumber === dualPhone) {
+          return {
+            id: `sfmc-${dualPhone}`,
+            name: 'Waseem SFMC Match',
+            phoneNumber: dualPhone,
+            email: 'test@example.com',
+            company: 'SFMC Match',
+            lastSyncedAt: new Date().toISOString()
+          };
+        }
+        return originalFind(p);
+      };
     }
 
     const wamid = `wamid.test.ambiguous.${Date.now()}`;

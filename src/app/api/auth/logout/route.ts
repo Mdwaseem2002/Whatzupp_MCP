@@ -1,8 +1,11 @@
+// src/app/api/auth/logout/route.ts
 import { NextResponse } from 'next/server';
-
-// Logout endpoint disabled — SFMC integration handles authentication.
-// Returns success no-op to avoid 404s.
+import { deleteSessionCookie } from '@/lib/auth';
 
 export async function POST() {
-  return NextResponse.json({ success: true });
+  await deleteSessionCookie();
+  return NextResponse.json({
+    success: true,
+    message: 'Logged out successfully',
+  });
 }

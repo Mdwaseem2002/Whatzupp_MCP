@@ -6,8 +6,9 @@ import { Message } from '@/types';
 const messageEmitters: Record<string, Set<(message: Message) => void>> = {};
 
 // Internal function for broadcasting messages (not exported)
-function broadcastMessageInternal(phoneNumber: string, message: Message) {
-  const emitters = messageEmitters[phoneNumber];
+function broadcastMessageInternal(phoneNumber: string, message: Message, workspaceId: string) {
+  const key = `${workspaceId}:${phoneNumber}`;
+  const emitters = messageEmitters[key];
   if (emitters) {
     emitters.forEach(emitter => emitter(message));
   }
@@ -16,10 +17,13 @@ function broadcastMessageInternal(phoneNumber: string, message: Message) {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const phoneNumber = searchParams.get('phoneNumber');
+  const workspaceId = searchParams.get('workspaceId') || 'sfmc-ws-1';
 
   if (!phoneNumber) {
     return NextResponse.json({ error: 'Phone number is required' }, { status: 400 });
   }
+
+  const key = `${workspaceId}:${phoneNumber}`;
 
   const encoder = new TextEncoder();
   let messageListener: ((message: Message) => void) | null = null;
@@ -36,16 +40,16 @@ export async function GET(request: Request) {
           controller.enqueue(encoder.encode(`data: ${eventData}\n\n`));
         } catch {
           console.warn('Could not enqueue to closed SSE controller. Removing listener.');
-          if (messageListener && messageEmitters[phoneNumber]) {
-            messageEmitters[phoneNumber].delete(messageListener);
+          if (messageListener && messageEmitters[key]) {
+            messageEmitters[key].delete(messageListener);
           }
         }
       };
 
-      if (!messageEmitters[phoneNumber]) {
-        messageEmitters[phoneNumber] = new Set();
+      if (!messageEmitters[key]) {
+        messageEmitters[key] = new Set();
       }
-      messageEmitters[phoneNumber].add(messageListener);
+      messageEmitters[key].add(messageListener);
 
       // Heartbeat every 30s to keep alive
       heartbeatInterval = setInterval(() => {
@@ -53,16 +57,16 @@ export async function GET(request: Request) {
           controller.enqueue(encoder.encode(`: heartbeat\n\n`));
         } catch {
           if (heartbeatInterval) clearInterval(heartbeatInterval);
-          if (messageListener && messageEmitters[phoneNumber]) {
-            messageEmitters[phoneNumber].delete(messageListener);
+          if (messageListener && messageEmitters[key]) {
+            messageEmitters[key].delete(messageListener);
           }
         }
       }, 30000);
     },
     cancel() {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
-      if (messageListener && messageEmitters[phoneNumber]) {
-        messageEmitters[phoneNumber].delete(messageListener);
+      if (messageListener && messageEmitters[key]) {
+        messageEmitters[key].delete(messageListener);
       }
     }
   });
@@ -79,7 +83,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { phoneNumber, message } = body;
+    const { phoneNumber, message, workspaceId } = body;
+    const targetWsId = workspaceId || 'sfmc-ws-1';
 
     if (!phoneNumber || !message) {
       return NextResponse.json(
@@ -89,7 +94,7 @@ export async function POST(request: Request) {
     }
 
     // Broadcast the message internally
-    broadcastMessageInternal(phoneNumber, message);
+    broadcastMessageInternal(phoneNumber, message, targetWsId);
 
     return NextResponse.json({ 
       success: true, 

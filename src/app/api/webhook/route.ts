@@ -131,9 +131,10 @@ export async function POST(request: Request) {
                   filename = mediaObj?.filename;
 
                   if (mediaId) {
+                    const fnStr = filename ? ` ${filename}` : '';
                     contentText = caption
-                      ? `${caption}\n[Media: ${mediaType}: ${mediaId}]`
-                      : `[Media: ${mediaType}: ${mediaId}]`;
+                      ? `${caption}\n[Media: ${mediaType}: ${mediaId}]${fnStr}`
+                      : `[Media: ${mediaType}: ${mediaId}]${fnStr}`;
                   } else if (caption) {
                     contentText = caption;
                   } else {
@@ -156,35 +157,109 @@ export async function POST(request: Request) {
                 }
 
                 // ─── ONE CONVERSATION, ONE OWNING WORKSPACE ROUTING ───
+                // 
+                // Ownership determination strategy (production-safe):
+                //   1. Try kvStore (works in dev, ephemeral on Vercel without KV)
+                //   2. Query Salesforce WhatsApp_Message__c for last OUTBOUND message
+                //      — this is the REAL persistent source of truth
+                //   3. Fall through to findContact lookup across workspaces
 
-                // Step 1: Check conversation ownership in kvStore
-                const owner = await getConversationOwner(normalizedPhone);
+                let ownerWorkspaceId: string | null = null;
+                console.log(`[webhook] DIAGNOSTIC: Inbound Phone: ${message.from}`);
+                console.log(`[webhook] DIAGNOSTIC: Normalized Phone: ${normalizedPhone}`);
+
+                // Step 1: Try kvStore first (fast path, works when KV_REST_API_URL is set)
+                const kvOwner = await getConversationOwner(normalizedPhone);
+                if (kvOwner && kvOwner.workspaceId) {
+                  const owningConnector = workspaceRegistry.getConnector(kvOwner.workspaceId);
+                  if (owningConnector) {
+                    ownerWorkspaceId = kvOwner.workspaceId;
+                    console.log(`[webhook] Ownership from kvStore: ${ownerWorkspaceId}`);
+                  }
+                }
+
+                // Step 2: kvStore miss → query persistent stores for last OUTBOUND message
+                // This survives Vercel cold starts
+                if (!ownerWorkspaceId) {
+                  try {
+                    const { SalesCloudConnector } = await import('@/lib/connectors/salesCloudConnector');
+                    const scConnector = new SalesCloudConnector();
+                    
+                    let scLastOutboundDate: Date | null = null;
+                    let sfmcLastOutboundDate: Date | null = null;
+
+                    // Check Sales Cloud Outbound History
+                    try {
+                      const lastScOutbound = await scConnector.execSoql(
+                        `SELECT Id, Phone__c, Timestamp__c FROM WhatsApp_Message__c WHERE Direction__c = 'OUTBOUND' AND (Phone__c = '${normalizedPhone}' OR Phone__c LIKE '%${normalizedPhone.slice(-10)}') ORDER BY Timestamp__c DESC LIMIT 1`
+                      );
+                      if (lastScOutbound && lastScOutbound.length > 0) {
+                        scLastOutboundDate = new Date(lastScOutbound[0].Timestamp__c);
+                      }
+                    } catch (scErr) {
+                      console.warn('[webhook] Salesforce outbound history check failed:', scErr);
+                    }
+
+                    // Check SFMC Outbound History
+                    try {
+                      const { getSfmcAccessToken } = await import('@/lib/sfmcAuth');
+                      const { access_token } = await getSfmcAccessToken();
+                      const sfmcRestBaseUri = process.env.SFMC_REST_BASE_URI!.replace(/\/$/, '');
+                      
+                      // Using $top=1 and orderby SentTime/CreatedDate
+                      const sfmcUrl = `${sfmcRestBaseUri}/data/v1/customobjectdata/key/WhatsApp_Sent_Messages/rowset?$filter=Phone%20eq%20'${normalizedPhone}'%20or%20endswith(Phone,'${normalizedPhone.slice(-10)}')&$orderBy=SentTime%20DESC&$top=1`;
+                      
+                      const sfmcRes = await fetch(sfmcUrl, {
+                        headers: { 'Authorization': `Bearer ${access_token}` },
+                      });
+                      
+                      if (sfmcRes.ok) {
+                        const sfmcData = await sfmcRes.json();
+                        if (sfmcData.items && sfmcData.items.length > 0) {
+                          const item = sfmcData.items[0].values;
+                          const sentTimeStr = item.senttime || item.createddate || item.SentTime || item.CreatedDate;
+                          if (sentTimeStr) sfmcLastOutboundDate = new Date(sentTimeStr);
+                        }
+                      }
+                    } catch (sfmcErr) {
+                      console.warn('[webhook] SFMC outbound history check failed:', sfmcErr);
+                    }
+
+                    // Determine Winner
+                    if (scLastOutboundDate || sfmcLastOutboundDate) {
+                      if (scLastOutboundDate && (!sfmcLastOutboundDate || scLastOutboundDate > sfmcLastOutboundDate)) {
+                        ownerWorkspaceId = 'salescloud-ws-1';
+                        console.log(`[webhook] Ownership from OUTBOUND history: salescloud-ws-1`);
+                        await setConversationOwner(normalizedPhone, 'salescloud-ws-1', 'outbound');
+                      } else if (sfmcLastOutboundDate) {
+                        ownerWorkspaceId = 'sfmc-ws-1';
+                        console.log(`[webhook] Ownership from OUTBOUND history: sfmc-ws-1`);
+                        await setConversationOwner(normalizedPhone, 'sfmc-ws-1', 'outbound');
+                      }
+                    }
+                  } catch (err) {
+                    console.warn('[webhook] Outbound history check failed:', err);
+                  }
+                }
+
+                console.log(`[webhook] DIAGNOSTIC: conversation_owner lookup result: ${ownerWorkspaceId}`);
+
                 let handled = false;
 
-                if (owner && owner.workspaceId) {
-                  const owningConnector = workspaceRegistry.getConnector(owner.workspaceId);
-                  if (owningConnector) {
-                    console.log(`[webhook] Conversation for ${normalizedPhone} owned by workspace ${owner.workspaceId}. Writing to ${owner.workspaceId} ONLY.`);
-                    
-                    if (owner.workspaceId === 'salescloud-ws-1') {
-                      const scConn = owningConnector as any;
-                      const contact = await owningConnector.findContact({ phoneNumber: normalizedPhone });
-                      await scConn.saveInboundMessage({
+                // Route to owning workspace
+                if (ownerWorkspaceId) {
+                  console.log(`[webhook] Conversation for ${normalizedPhone} owned by workspace ${ownerWorkspaceId}. Writing to ${ownerWorkspaceId} ONLY.`);
+
+                  if (ownerWorkspaceId === 'salescloud-ws-1') {
+                    const scConnector = workspaceRegistry.getConnector('salescloud-ws-1') as any;
+                    if (scConnector) {
+                      const contact = await scConnector.findContact({ phoneNumber: normalizedPhone });
+                      await scConnector.saveInboundMessage(normalizedPhone, {
                         messageId,
-                        senderPhone: normalizedPhone,
                         content: contentText,
                         timestamp: msgIsoTimestamp,
                         leadId: contact?.salesforceObjectType === 'Lead' ? contact.salesforceRecordId : undefined,
                         contactId: contact?.salesforceObjectType === 'Contact' ? contact.salesforceRecordId : undefined,
-                      });
-                    } else if (owner.workspaceId === 'sfmc-ws-1') {
-                      await writeReceivedMessage({
-                        WaMid: messageId,
-                        Phone: normalizedPhone,
-                        ContactName: '',
-                        MessageType: message.type as string || 'text',
-                        MessageContent: contentText || '',
-                        ReceivedTime: msgIsoTimestamp,
                       });
                       emitRealtimeMessage(normalizedPhone, {
                         id: messageId,
@@ -193,18 +268,31 @@ export async function POST(request: Request) {
                         sender: 'contact',
                         status: 'DELIVERED',
                         recipientId: 'user',
-                      }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
+                      }, ownerWorkspaceId).catch(e => console.warn('[webhook] Sales Cloud realtime emit failed:', e));
+                      handled = true;
                     }
-
-                    // Refresh ownership timestamp
-                    await setConversationOwner(normalizedPhone, owner.workspaceId, owner.assignedBy || 'outbound');
+                  } else if (ownerWorkspaceId === 'sfmc-ws-1') {
+                    await writeReceivedMessage({
+                      WaMid: messageId,
+                      Phone: normalizedPhone,
+                      ContactName: '',
+                      MessageType: message.type as string || 'text',
+                      MessageContent: contentText || '',
+                      ReceivedTime: msgIsoTimestamp,
+                    });
+                    emitRealtimeMessage(normalizedPhone, {
+                      id: messageId,
+                      content: contentText || '',
+                      timestamp: msgIsoTimestamp,
+                      sender: 'contact',
+                      status: 'DELIVERED',
+                      recipientId: 'user',
+                    }, ownerWorkspaceId).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
                     handled = true;
-                  } else {
-                    console.warn(`[webhook] Owner workspace ${owner.workspaceId} no longer exists in registry. Falling through to lookup.`);
                   }
                 }
 
-                // Step 2: No valid ownership record — perform read-only findContact lookup across registered connectors
+                // Step 3: No ownership found — findContact lookup across workspaces
                 if (!handled) {
                   const allWorkspaces = workspaceRegistry.getAllWorkspaces();
                   const matches: Array<{ workspaceId: string; connector: any; contact: any }> = [];
@@ -216,9 +304,12 @@ export async function POST(request: Request) {
                         matches.push({ workspaceId: ws.workspaceId, connector: ws.connector, contact });
                       }
                     } catch (err) {
-                      console.warn(`[webhook] findContact error for workspace ${ws.workspaceId}:`, err);
+                      console.warn(`[webhook] findContact error for ${ws.workspaceId}:`, err);
                     }
                   }
+
+                  const matchedIds = matches.map(m => m.workspaceId).join(', ');
+                  console.log(`[webhook] DIAGNOSTIC: fallback matched workspaces: ${matchedIds || 'none'}`);
 
                   console.log(`[webhook] Workspace matches for ${normalizedPhone}: ${matches.map(m => m.workspaceId).join(', ')}`);
 
@@ -227,14 +318,21 @@ export async function POST(request: Request) {
                     console.log(`[webhook] Exactly 1 workspace match (${singleMatch.workspaceId}). Writing & setting ownership.`);
 
                     if (singleMatch.workspaceId === 'salescloud-ws-1') {
-                      await singleMatch.connector.saveInboundMessage({
+                      await singleMatch.connector.saveInboundMessage(normalizedPhone, {
                         messageId,
-                        senderPhone: normalizedPhone,
                         content: contentText,
                         timestamp: msgIsoTimestamp,
                         leadId: singleMatch.contact?.salesforceObjectType === 'Lead' ? singleMatch.contact.salesforceRecordId : undefined,
                         contactId: singleMatch.contact?.salesforceObjectType === 'Contact' ? singleMatch.contact.salesforceRecordId : undefined,
                       });
+                      emitRealtimeMessage(normalizedPhone, {
+                        id: messageId,
+                        content: contentText || '',
+                        timestamp: msgIsoTimestamp,
+                        sender: 'contact',
+                        status: 'DELIVERED',
+                        recipientId: 'user',
+                      }, singleMatch.workspaceId).catch(e => console.warn('[webhook] Sales Cloud realtime emit failed:', e));
                     } else if (singleMatch.workspaceId === 'sfmc-ws-1') {
                       await writeReceivedMessage({
                         WaMid: messageId,
@@ -251,7 +349,7 @@ export async function POST(request: Request) {
                         sender: 'contact',
                         status: 'DELIVERED',
                         recipientId: 'user',
-                      }).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
+                      }, singleMatch.workspaceId).catch(e => console.warn('[webhook] SFMC realtime emit failed:', e));
                     }
 
                     await setConversationOwner(normalizedPhone, singleMatch.workspaceId, 'inbound_match');

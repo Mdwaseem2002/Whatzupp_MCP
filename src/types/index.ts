@@ -1,11 +1,23 @@
 // Contact represents a WhatsApp contact/recipient
 export interface Contact {
-    online: unknown;
+    online?: boolean | unknown;
     id: string;
     name: string;
     phoneNumber: string;
     avatar?: string;
     lastSeen?: string;
+    email?: string;
+    company?: string;
+    designation?: string;
+    location?: string;
+    tags?: string[];
+    salesforceObjectType?: string;
+    salesforceRecordId?: string;
+    leadStatus?: string;
+    accountName?: string;
+    opportunityName?: string;
+    ownerName?: string;
+    lastSyncedAt?: string;
   }
   
   // Different statuses a message can have
@@ -136,6 +148,19 @@ export interface Contact {
     avatar?: string;
     lastSeen?: string;
     phoneNumber: string;
+    online?: boolean | unknown;
+    email?: string;
+    company?: string;
+    designation?: string;
+    location?: string;
+    tags?: string[];
+    salesforceObjectType?: string;
+    salesforceRecordId?: string;
+    leadStatus?: string;
+    accountName?: string;
+    opportunityName?: string;
+    ownerName?: string;
+    lastSyncedAt?: string;
   }
   
   

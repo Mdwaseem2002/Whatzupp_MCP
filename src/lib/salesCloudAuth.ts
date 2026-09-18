@@ -27,28 +27,14 @@ export async function getSalesCloudAccessToken(forceRefresh = false): Promise<{ 
     };
   }
 
-  const loginUrl = (process.env.SALESCLOUD_LOGIN_URL || 'https://login.salesforce.com').replace(/\/$/, '');
+  const instanceUrlOverride = process.env.SALESCLOUD_INSTANCE_URL || 'https://pentacloudconsultancy-dev-ed.develop.my.salesforce.com';
+  const loginUrl = (process.env.SALESCLOUD_LOGIN_URL || instanceUrlOverride).replace(/\/$/, '');
   const clientId = process.env.SALESCLOUD_CLIENT_ID;
   const clientSecret = process.env.SALESCLOUD_CLIENT_SECRET;
   const refreshToken = process.env.SALESCLOUD_REFRESH_TOKEN;
-  const instanceUrlOverride = process.env.SALESCLOUD_INSTANCE_URL || 'https://pentacloudconsultancy-dev-ed.develop.my.salesforce.com';
   const directToken = process.env.SALESCLOUD_ACCESS_TOKEN;
 
-  // 1. Use direct access token from env if available (most common in Vercel deployment)
-  if (!forceRefresh && directToken) {
-    console.log('[SalesCloud Auth] Using SALESCLOUD_ACCESS_TOKEN from env.');
-    cachedToken = {
-      access_token: directToken,
-      instance_url: instanceUrlOverride,
-      expiresAt: Date.now() + TOKEN_TTL_MS,
-    };
-    return {
-      access_token: directToken,
-      instance_url: instanceUrlOverride,
-    };
-  }
-
-  // 2. Try Salesforce OAuth Token flow (refresh_token or client_credentials)
+  // 1. Try Salesforce OAuth Token flow (refresh_token or client_credentials)
   if (clientId && (refreshToken || clientSecret)) {
     try {
       const params = new URLSearchParams();
@@ -63,32 +49,40 @@ export async function getSalesCloudAccessToken(forceRefresh = false): Promise<{ 
         params.append('client_secret', clientSecret || '');
       }
 
-      const tokenUrl = `${loginUrl}/services/oauth2/token`;
-      console.log(`[SalesCloud Auth] Attempting OAuth token refresh via ${tokenUrl}`);
-      const res = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params.toString(),
-      });
+      // Try domain loginUrl first, then instanceUrl as fallback
+      const tokenUrls = Array.from(new Set([
+        `${loginUrl}/services/oauth2/token`,
+        `${instanceUrlOverride}/services/oauth2/token`,
+        `https://login.salesforce.com/services/oauth2/token`
+      ]));
 
-      if (res.ok) {
-        const data = await res.json();
-        const instance_url = instanceUrlOverride || data.instance_url;
+      for (const tokenUrl of tokenUrls) {
+        console.log(`[SalesCloud Auth] Attempting OAuth token refresh via ${tokenUrl}`);
+        const res = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString(),
+        });
 
-        cachedToken = {
-          access_token: data.access_token,
-          instance_url,
-          expiresAt: Date.now() + TOKEN_TTL_MS,
-        };
+        if (res.ok) {
+          const data = await res.json();
+          const instance_url = instanceUrlOverride || data.instance_url;
 
-        console.log('[SalesCloud Auth] OAuth token refresh successful.');
-        return {
-          access_token: cachedToken.access_token,
-          instance_url: cachedToken.instance_url,
-        };
-      } else {
-        const errText = await res.text().catch(() => '');
-        console.error(`[SalesCloud Auth] OAuth token refresh failed (${res.status}): ${errText}`);
+          cachedToken = {
+            access_token: data.access_token,
+            instance_url,
+            expiresAt: Date.now() + TOKEN_TTL_MS,
+          };
+
+          console.log('[SalesCloud Auth] OAuth token refresh successful.');
+          return {
+            access_token: cachedToken.access_token,
+            instance_url: cachedToken.instance_url,
+          };
+        } else {
+          const errText = await res.text().catch(() => '');
+          console.error(`[SalesCloud Auth] OAuth token refresh via ${tokenUrl} failed (${res.status}): ${errText}`);
+        }
       }
     } catch (err) {
       console.error('[SalesCloud Auth] Error fetching OAuth token:', err);

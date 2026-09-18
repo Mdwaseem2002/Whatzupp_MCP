@@ -65,10 +65,16 @@
 
                         <!-- Media: Document -->
                         <template if:true={msg.isDocument}>
-                            <div class="media-doc-box">
-                                <span class="doc-icon">📄</span>
-                                <span class="doc-name">{msg.fileName}</span>
-                            </div>
+                            <a href={msg.mediaUrl} target="_blank" rel="noopener noreferrer" class="doc-link">
+                                <div class="media-doc-box">
+                                    <span class="doc-icon">📄</span>
+                                    <div class="doc-details">
+                                        <span class="doc-name">{msg.fileName}</span>
+                                        <span class="doc-sub">Click to View PDF ↗</span>
+                                    </div>
+                                    <span class="doc-dl-icon">📥</span>
+                                </div>
+                            </a>
                         </template>
 
                         <!-- Text content (Standalone or Media Caption) -->
@@ -91,6 +97,62 @@
                 <div class="upload-indicator">
                     <lightning-spinner alternative-text="Uploading file..." size="small"></lightning-spinner>
                     <span>Uploading {uploadFileName}...</span>
+                </div>
+            </template>
+
+            <!-- ─── FAST REPLIES PANEL ─── -->
+            <template if:true={showFastReplies}>
+                <div class="emoji-picker-panel" style="width: 320px; max-height: 400px; overflow-y: auto;">
+                    <div class="panel-header">
+                        <span class="panel-title">⚡ Fast Replies</span>
+                        <button class="close-btn" onclick={handleCloseFastReplies}>✕</button>
+                    </div>
+                    
+                    <div class="slds-p-around_small">
+                        <template if:false={isAddingFastReply}>
+                            <lightning-button 
+                                variant="base" 
+                                label="+ Add New Fast Reply" 
+                                onclick={openAddFastReply}
+                                class="slds-m-bottom_small"
+                            ></lightning-button>
+
+                            <template if:true={hasFastReplies}>
+                                <div class="slds-m-top_small">
+                                    <template for:each={fastReplies} for:item="reply">
+                                        <div key={reply.id} class="slds-box slds-box_x-small slds-m-bottom_x-small" style="cursor:pointer; background:#f4f6f9; border-color:#e5e7eb;" data-msg={reply.message} onclick={handleSelectFastReply}>
+                                            <div class="slds-text-title_bold" style="color: #6366f1;">{reply.shortcut}</div>
+                                            <div class="slds-truncate slds-m-top_xxx-small" style="font-size: 0.85rem; color: #475569;">{reply.message}</div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                            <template if:false={hasFastReplies}>
+                                <p class="slds-text-align_center slds-text-color_weak slds-m-top_medium">No fast replies yet.</p>
+                            </template>
+                        </template>
+
+                        <!-- Add New Fast Reply Form -->
+                        <template if:true={isAddingFastReply}>
+                            <lightning-input 
+                                label="Shortcut" 
+                                placeholder="/thanks"
+                                value={newFastReplyShortcut} 
+                                onchange={handleNewShortcutChange}
+                            ></lightning-input>
+                            <lightning-textarea 
+                                label="Message" 
+                                placeholder="Type your fast reply message here..."
+                                value={newFastReplyMessage} 
+                                onchange={handleNewMessageChange}
+                                class="slds-m-top_x-small"
+                            ></lightning-textarea>
+                            <div class="slds-m-top_small slds-grid slds-grid_align-end">
+                                <lightning-button label="Cancel" onclick={cancelAddFastReply} class="slds-m-right_x-small"></lightning-button>
+                                <lightning-button variant="brand" label="Save" onclick={saveFastReply}></lightning-button>
+                            </div>
+                        </template>
+                    </div>
                 </div>
             </template>
 
@@ -224,6 +286,15 @@
             <!-- Chat Footer / Action Toolbar -->
             <div class="chat-footer">
                 <div class="toolbar-row">
+                    <!-- Fast Replies Toggle Button -->
+                    <lightning-button-icon 
+                        icon-name="utility:quick_text" 
+                        alternative-text="Fast Replies" 
+                        title="Fast Replies"
+                        onclick={handleToggleFastReplies}
+                        class="tool-icon-btn"
+                    ></lightning-button-icon>
+
                     <!-- Template Toggle Button -->
                     <lightning-button-icon 
                         icon-name="utility:layout" 

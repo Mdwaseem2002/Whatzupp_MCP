@@ -6,12 +6,12 @@
 
 import React, { useState } from 'react';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
-import { WORKSPACE_COLORS } from '@/types/workspace';
+import { WORKSPACE_COLORS, LABEL_COLORS, LabelColor } from '@/types/workspace';
 import { motion } from 'framer-motion';
 import {
   User, Building2, Smartphone, Palette, Check, Plus, Trash2,
   Globe, Briefcase, Users2, ShoppingBag, Zap, Loader2,
-  Mail, Phone, Shield, ExternalLink, Settings, ChevronRight
+  Mail, Phone, Shield, ExternalLink, Settings, ChevronRight, Tag
 } from 'lucide-react';
 
 const ICON_OPTIONS = ['Building2', 'Briefcase', 'Globe', 'Users2', 'ShoppingBag', 'Zap'];
@@ -29,11 +29,12 @@ const renderIcon = (name: string, props: any = { size: 16 }) => {
 };
 
 export default function SettingsView() {
-  const [activeSection, setActiveSection] = useState<'profile' | 'workspaces' | 'whatsapp' | 'theme'>('profile');
+  const [activeSection, setActiveSection] = useState<'profile' | 'workspaces' | 'whatsapp' | 'theme' | 'labels'>('profile');
 
   const sections = [
     { key: 'profile' as const, label: 'Profile', icon: <User size={18} />, description: 'Personal info' },
     { key: 'workspaces' as const, label: 'Workspaces', icon: <Building2 size={18} />, description: 'Manage teams' },
+    { key: 'labels' as const, label: 'Chat Labels', icon: <Tag size={18} />, description: 'Organize chats' },
     { key: 'whatsapp' as const, label: 'WhatsApp API', icon: <Smartphone size={18} />, description: 'API credentials' },
     { key: 'theme' as const, label: 'Appearance', icon: <Palette size={18} />, description: 'UI preferences' },
   ];
@@ -86,6 +87,7 @@ export default function SettingsView() {
         <div className="max-w-2xl">
           {activeSection === 'profile' && <ProfileSection />}
           {activeSection === 'workspaces' && <WorkspacesSection />}
+          {activeSection === 'labels' && <LabelsSection />}
           {activeSection === 'whatsapp' && <WhatsAppConfigSection />}
           {activeSection === 'theme' && <ThemeSection />}
         </div>
@@ -497,6 +499,101 @@ function ThemeSection() {
         <p className="text-[12px] text-gray-400 mt-5 text-center">
           Theme preference is saved locally to your browser.
         </p>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Labels Section ───
+function LabelsSection() {
+  const { state, addChatLabel, deleteChatLabel } = useWorkspace();
+  const [newName, setNewName] = useState('');
+  const [newColor, setNewColor] = useState<LabelColor>('blue');
+
+  const workspaceLabels = state.chatLabels.filter(l => l.workspaceId === state.activeWorkspaceId);
+
+  const handleAdd = async () => {
+    if (!newName.trim() || !state.activeWorkspaceId) return;
+    try {
+      await addChatLabel({ name: newName.trim(), color: newColor, workspaceId: state.activeWorkspaceId });
+      setNewName('');
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+      <h3 className="text-xl font-bold text-gray-900 mb-1 tracking-tight">Chat Labels</h3>
+      <p className="text-sm text-gray-500 mb-6">Organize your WhatsApp conversations with color-coded tags.</p>
+
+      {/* Existing Labels */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h4 className="text-[14px] font-bold text-gray-900">Workspace Labels ({workspaceLabels.length})</h4>
+        </div>
+        <div className="divide-y divide-gray-50">
+          {workspaceLabels.map(label => (
+            <div key={label.id} className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <span
+                  className="w-3 h-3 rounded-full shadow-sm"
+                  style={{ backgroundColor: LABEL_COLORS[label.color] }}
+                />
+                <span className="text-[14px] font-bold text-gray-700">{label.name}</span>
+              </div>
+              <button
+                onClick={() => { if (confirm(`Delete label "${label.name}"?`)) deleteChatLabel(label.id); }}
+                className="w-8 h-8 rounded-lg bg-gray-50 border border-gray-200 text-gray-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 flex items-center justify-center transition-colors"
+                title="Delete Label"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          {workspaceLabels.length === 0 && (
+            <div className="px-6 py-8 text-center text-sm text-gray-400 font-medium">No labels found.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Add New Label */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <h4 className="text-[14px] font-bold text-gray-900 mb-4">Create New Label</h4>
+        <div className="flex flex-col md:flex-row gap-5 items-start md:items-center">
+          
+          <input
+            type="text"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            placeholder="Label Name (e.g. VIP)"
+            className="flex-1 w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#25D366]/20 focus:border-[#25D366] focus:bg-white transition-all"
+            onKeyDown={e => e.key === 'Enter' && handleAdd()}
+          />
+
+          <div className="flex items-center gap-2">
+            {(Object.keys(LABEL_COLORS) as LabelColor[]).map(color => (
+              <button
+                key={color}
+                onClick={() => setNewColor(color)}
+                className="w-6 h-6 rounded-full transition-all hover:scale-110"
+                style={{
+                  backgroundColor: LABEL_COLORS[color],
+                  boxShadow: newColor === color ? `0 0 0 2px white, 0 0 0 4px ${LABEL_COLORS[color]}` : 'none',
+                  transform: newColor === color ? 'scale(1.15)' : 'scale(1)',
+                }}
+              />
+            ))}
+          </div>
+
+          <button
+            onClick={handleAdd}
+            disabled={!newName.trim()}
+            className="w-full md:w-auto px-6 py-2.5 rounded-xl bg-[#25D366] text-white text-sm font-bold hover:bg-[#1db954] disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-sm shadow-green-600/15"
+          >
+            <Plus size={16} /> Create
+          </button>
+        </div>
       </div>
     </motion.div>
   );
