@@ -10,6 +10,7 @@ import type {
   AppState,
   ChatLabel,
   SavedList,
+  FastReplyTemplate,
 } from '@/types/workspace';
 import { SYSTEM_LABELS } from '@/types/workspace';
 
