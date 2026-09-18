@@ -42,6 +42,12 @@ interface WorkspaceContextValue {
   deleteChatLabel: (id: string) => Promise<void>;
   setConversationLabels: (conversationId: string, labelIds: string[]) => Promise<void>;
   viewLabelDetails: (id: string | null) => void;
+  addSavedList: (list: Omit<SavedList, 'id' | 'createdAt'>) => Promise<SavedList>;
+  updateSavedList: (id: string, updates: Partial<SavedList>) => Promise<void>;
+  deleteSavedList: (id: string) => Promise<void>;
+  activeSavedLists: SavedList[];
+  activeListId: string | null;
+  setActiveListId: (id: string | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -100,6 +106,7 @@ const DEFAULT_STATE: AppState = {
   savedLists: [],
   conversationLabels: {},
   activeLabelId: null,
+  activeListId: null,
 };
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
@@ -114,8 +121,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       const savedScreen = localStorage.getItem('wz_active_screen') as AppScreen | null;
       const cachedChatLabels = localStorage.getItem('wz_cached_chat_labels');
       const cachedConversationLabels = localStorage.getItem('wz_cached_conversation_labels');
+      const cachedSavedLists = localStorage.getItem('wz_cached_saved_lists');
 
-      if (cachedWsStr || savedWsId || savedScreen || cachedChatLabels || cachedConversationLabels) {
+      if (cachedWsStr || savedWsId || savedScreen || cachedChatLabels || cachedConversationLabels || cachedSavedLists) {
         setState(prev => {
           let workspaces = prev.workspaces;
           if (cachedWsStr) {
@@ -137,6 +145,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             try { parsedConversationLabels = JSON.parse(cachedConversationLabels); } catch(e) {}
           }
 
+          let parsedSavedLists = prev.savedLists;
+          if (cachedSavedLists) {
+            try { parsedSavedLists = JSON.parse(cachedSavedLists); } catch(e) {}
+          }
+
           return {
             ...prev,
             workspaces,
@@ -144,6 +157,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             activeScreen,
             chatLabels: parsedChatLabels,
             conversationLabels: parsedConversationLabels,
+            savedLists: parsedSavedLists,
           };
         });
       }
@@ -432,16 +446,71 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  // Saved Lists Management
+  const addSavedList = useCallback(async (list: Omit<SavedList, 'id' | 'createdAt'>) => {
+    const newList: SavedList = {
+      ...list,
+      id: `list-${Date.now()}`,
+      workspaceId: list.workspaceId || state.activeWorkspaceId || 'salescloud-ws-1',
+      matchType: list.matchType || 'ANY',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setState(prev => {
+      const updatedLists = [...prev.savedLists, newList];
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('wz_cached_saved_lists', JSON.stringify(updatedLists)); } catch(e) {}
+      }
+      return { ...prev, savedLists: updatedLists };
+    });
+    return newList;
+  }, [state.activeWorkspaceId]);
+
+  const updateSavedList = useCallback(async (id: string, updates: Partial<SavedList>) => {
+    setState(prev => {
+      const updatedLists = prev.savedLists.map(l => l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('wz_cached_saved_lists', JSON.stringify(updatedLists)); } catch(e) {}
+      }
+      return { ...prev, savedLists: updatedLists };
+    });
+  }, []);
+
+  const deleteSavedList = useCallback(async (id: string) => {
+    setState(prev => {
+      const updatedLists = prev.savedLists.filter(l => l.id !== id);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('wz_cached_saved_lists', JSON.stringify(updatedLists)); } catch(e) {}
+      }
+      return {
+        ...prev,
+        savedLists: updatedLists,
+        activeListId: prev.activeListId === id ? null : prev.activeListId,
+      };
+    });
+  }, []);
+
+  const setActiveListId = useCallback((id: string | null) => {
+    setState(prev => ({ ...prev, activeListId: id }));
+  }, []);
+
+  const activeSavedLists = useMemo(() => {
+    const wsId = state.activeWorkspaceId || 'salescloud-ws-1';
+    return state.savedLists.filter(l => l.workspaceId === wsId);
+  }, [state.savedLists, state.activeWorkspaceId]);
+
   const value: WorkspaceContextValue = useMemo(() => ({
     state, isReady, setProfile, completeOnboarding, addWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace, activeWorkspace,
     addContact, updateContact, deleteContact, activeContacts, allContacts, getWorkspaceForPhone, isPhoneVisibleInActiveWorkspace,
     addFastReply, updateFastReply, deleteFastReply, activeFastReplies, setActiveScreen, setTheme,
     addChatLabel, updateChatLabel, deleteChatLabel, setConversationLabels, viewLabelDetails,
+    addSavedList, updateSavedList, deleteSavedList, activeSavedLists, activeListId: state.activeListId, setActiveListId,
   }), [
     state, isReady, setProfile, completeOnboarding, addWorkspace, updateWorkspace, deleteWorkspace, setActiveWorkspace, activeWorkspace,
     addContact, updateContact, deleteContact, activeContacts, allContacts, getWorkspaceForPhone, isPhoneVisibleInActiveWorkspace,
     addFastReply, updateFastReply, deleteFastReply, activeFastReplies, setActiveScreen, setTheme,
     addChatLabel, updateChatLabel, deleteChatLabel, setConversationLabels, viewLabelDetails,
+    addSavedList, updateSavedList, deleteSavedList, activeSavedLists, setActiveListId,
   ]);
 
   return (

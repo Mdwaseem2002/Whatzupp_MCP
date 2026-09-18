@@ -66,15 +66,28 @@ export interface ChatLabel {
   createdAt: string;
 }
 
+export interface SavedListFilter {
+  unreadOnly?: boolean;
+  lastActivityRange?: string; // e.g. 'today' | '7d' | '30d'
+  assignedUser?: string;
+  leadStatus?: string;
+  workspaceId?: string;
+}
+
 export interface SavedList {
   id: string;
   workspaceId: string;
   name: string;
-  labels: string[]; // array of label IDs
-  unreadOnly?: boolean;
+  description?: string;
+  labelIds: string[]; // array of label IDs
+  matchType?: 'ANY' | 'ALL'; // ANY = OR matching, ALL = AND matching
+  contactCount?: number; // cached matching contacts count for high performance
+  filters?: SavedListFilter;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: string;
+  updatedAt?: string;
 }
-
 
 export type AppScreen =
   | 'onboarding-profile'
@@ -90,7 +103,8 @@ export type AppScreen =
   | 'salescloud'
   | 'settings'
   | 'fast-reply'
-  | 'labels';
+  | 'labels'
+  | 'lists';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -107,6 +121,7 @@ export interface AppState {
   savedLists: SavedList[];
   conversationLabels: Record<string, string[]>; // mapping of conversationId (contactId) -> array of labelIds
   activeLabelId: string | null;
+  activeListId: string | null;
 }
 
 // Default seed workspaces for onboarding

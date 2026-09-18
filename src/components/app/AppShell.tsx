@@ -5,7 +5,7 @@
 // Authentication removed — app is integrated directly with SFMC
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { LayoutDashboard, MessageSquare, Users2, Send, LayoutTemplate, Target, BarChart3, Cloud, CircleDot, Settings, Crown, HelpCircle, Shield, LogOut, Bell, RefreshCw, Tag } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Users2, Send, LayoutTemplate, Target, BarChart3, Cloud, CircleDot, Settings, Crown, HelpCircle, Shield, LogOut, Bell, RefreshCw, Tag, FolderKanban } from 'lucide-react';
 import WorkspaceSwitcher from '@/components/workspace/WorkspaceSwitcher';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -21,6 +21,7 @@ import FastReplyView from '@/components/app/FastReplyView';
 import SFMCView from '@/components/app/SFMCView';
 import SalesCloudView from '@/components/app/SalesCloudView';
 import LabelsView from '@/components/app/LabelsView';
+import ListsView from '@/components/app/ListsView';
 import type { AppScreen } from '@/types/workspace';
 
 class ViewErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: string }> {
@@ -63,6 +64,7 @@ const NAV_ITEMS: { key: AppScreen; label: string; icon: React.ReactNode; isGreen
   { key: 'chats', label: 'Chats', icon: <MessageSquare size={19} /> },
   { key: 'contacts', label: 'Contacts', icon: <Users2 size={19} /> },
   { key: 'labels', label: 'Labels', icon: <Tag size={19} /> },
+  { key: 'lists', label: 'Lists', icon: <FolderKanban size={19} /> },
   { key: 'broadcasts', label: 'Broadcasts', icon: <Send size={19} /> },
   { key: 'templates', label: 'Templates', icon: <LayoutTemplate size={19} /> },
   { key: 'automation', label: 'Automation', icon: <Target size={19} /> },
@@ -195,6 +197,7 @@ export default function AppShell() {
       case 'salescloud': return hasWorkspacePermission('SALES_CLOUD') ? <SalesCloudView /> : <DashboardView />;
       case 'fast-reply': return <FastReplyView />;
       case 'labels': return <LabelsView />;
+      case 'lists': return <ListsView />;
       default: return <DashboardView />;
     }
   };
