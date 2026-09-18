@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
 import { LABEL_COLORS, LabelColor, SavedList } from '@/types/workspace';
 import ListDetailsView from '@/components/app/ListDetailsView';
@@ -13,13 +13,11 @@ import {
   Tag,
   ArrowRight,
   X,
-  Check,
   CheckSquare,
   Square,
   Clock,
   Edit2,
-  Trash2,
-  Info
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -28,12 +26,78 @@ export default function ListsView() {
     activeSavedLists,
     state,
     activeContacts,
+    activeWorkspace,
     addSavedList,
     updateSavedList,
     deleteSavedList,
     activeListId,
     setActiveListId
   } = useWorkspace();
+
+  // Live workspace contacts fetched directly from workspace API
+  const [liveContacts, setLiveContacts] = useState<any[]>([]);
+
+  // Fetch live contacts from workspace API (Sales Cloud / SFMC)
+  useEffect(() => {
+    if (!activeWorkspace) return;
+    const wsId = activeWorkspace.id || 'salescloud-ws-1';
+    const isSalesCloud = activeWorkspace.type === 'salescloud' || wsId === 'salescloud-ws-1';
+    const wsKey = isSalesCloud
+      ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+      : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
+
+    fetch(`/api/workspaces/${wsId}/contacts`, {
+      headers: { 'X-Workspace-Key': wsKey },
+      cache: 'no-store'
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.contacts && Array.isArray(data.contacts)) {
+          setLiveContacts(data.contacts);
+        }
+      })
+      .catch(err => console.warn('[ListsView] Fetch live contacts failed:', err));
+  }, [activeWorkspace?.id]);
+
+  // Combine live workspace contacts + local activeContacts
+  const allWorkspaceContacts = useMemo(() => {
+    const map = new Map<string, any>();
+    liveContacts.forEach(c => map.set(c.id, c));
+    activeContacts.forEach(c => {
+      if (!map.has(c.id)) map.set(c.id, c);
+      else map.set(c.id, { ...map.get(c.id), ...c });
+    });
+    return Array.from(map.values());
+  }, [liveContacts, activeContacts]);
+
+  // Robust multi-source label matching helper
+  const contactHasLabel = (contact: any, labelId: string, labelName: string): boolean => {
+    const normName = labelName.toLowerCase().trim();
+
+    // 1. Check conversationLabels by contact.id, phoneNumber, or salesforceRecordId
+    const assignedById = state.conversationLabels[contact.id] || [];
+    const assignedByPhone = contact.phoneNumber ? (state.conversationLabels[contact.phoneNumber] || []) : [];
+    const assignedBySfId = contact.salesforceRecordId ? (state.conversationLabels[contact.salesforceRecordId] || []) : [];
+
+    if (assignedById.includes(labelId) || assignedByPhone.includes(labelId) || assignedBySfId.includes(labelId)) {
+      return true;
+    }
+
+    // 2. Check contact.labels string (comma separated from Salesforce e.g. "Qualified, VIP")
+    const rawLabelsStr = contact.labels || contact.WhatZupp_Labels__c || '';
+    if (rawLabelsStr && typeof rawLabelsStr === 'string') {
+      const splitNames = rawLabelsStr.split(',').map(s => s.trim().toLowerCase());
+      if (splitNames.includes(normName)) return true;
+    }
+
+    // 3. Check contact.tags array (e.g. ["Qualified", "VIP"])
+    if (Array.isArray(contact.tags)) {
+      const normTags = contact.tags.map((t: string) => String(t).trim().toLowerCase());
+      if (normTags.includes(normName)) return true;
+    }
+
+    return false;
+  };
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -45,7 +109,6 @@ export default function ListsView() {
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   const [matchType, setMatchType] = useState<'ANY' | 'ALL'>('ANY');
 
-  // Open modal for creation
   const handleOpenCreate = () => {
     setEditingList(null);
     setName('');
@@ -55,7 +118,6 @@ export default function ListsView() {
     setIsModalOpen(true);
   };
 
-  // Open modal for editing
   const handleOpenEdit = (list: SavedList, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setEditingList(list);
@@ -66,12 +128,10 @@ export default function ListsView() {
     setIsModalOpen(true);
   };
 
-  // Save list handler (Create or Edit)
   const handleSaveList = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
-    // Compute matching count for cache
     const cachedCount = livePreviewCount;
 
     if (editingList) {
@@ -99,57 +159,30 @@ export default function ListsView() {
   // Calculate live preview count of matching contacts for the modal form
   const livePreviewCount = useMemo(() => {
     if (selectedLabelIds.length === 0) return 0;
-    
-    const targetLabelIds = new Set(selectedLabelIds);
-    const targetLabelNames = new Set(
-      state.chatLabels
-        .filter(l => selectedLabelIds.includes(l.id))
-        .map(l => l.name.toLowerCase())
-    );
 
-    return activeContacts.filter(contact => {
-      const assignedIds = state.conversationLabels[contact.id] || [];
-      const contactTagNames = (contact.tags || []).map(t => t.toLowerCase());
+    const targetLabelObjs = state.chatLabels.filter(l => selectedLabelIds.includes(l.id));
 
+    return allWorkspaceContacts.filter(contact => {
       if (matchType === 'ALL') {
-        return Array.from(targetLabelIds).every(labelId => {
-          const labelObj = state.chatLabels.find(l => l.id === labelId);
-          const hasIdMatch = assignedIds.includes(labelId);
-          const hasNameMatch = labelObj ? contactTagNames.includes(labelObj.name.toLowerCase()) : false;
-          return hasIdMatch || hasNameMatch;
-        });
+        return targetLabelObjs.every(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       } else {
-        const hasIdMatch = assignedIds.some(id => targetLabelIds.has(id));
-        const hasNameMatch = contactTagNames.some(tagName => targetLabelNames.has(tagName));
-        return hasIdMatch || hasNameMatch;
+        return targetLabelObjs.some(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       }
     }).length;
-  }, [selectedLabelIds, matchType, activeContacts, state.conversationLabels, state.chatLabels]);
+  }, [selectedLabelIds, matchType, allWorkspaceContacts, state.conversationLabels, state.chatLabels]);
 
   // Compute contacts count for each list in the dashboard grid
   const getListContactCount = (list: SavedList): number => {
     if (!list.labelIds || list.labelIds.length === 0) return 0;
 
-    const targetLabelIds = new Set(list.labelIds);
-    const listLabelObjs = state.chatLabels.filter(l => list.labelIds.includes(l.id));
-    const targetLabelNames = new Set(listLabelObjs.map(l => l.name.toLowerCase()));
+    const targetLabelObjs = state.chatLabels.filter(l => list.labelIds.includes(l.id));
     const type = list.matchType || 'ANY';
 
-    return activeContacts.filter(contact => {
-      const assignedIds = state.conversationLabels[contact.id] || [];
-      const contactTagNames = (contact.tags || []).map(t => t.toLowerCase());
-
+    return allWorkspaceContacts.filter(contact => {
       if (type === 'ALL') {
-        return Array.from(targetLabelIds).every(labelId => {
-          const labelObj = state.chatLabels.find(l => l.id === labelId);
-          const hasIdMatch = assignedIds.includes(labelId);
-          const hasNameMatch = labelObj ? contactTagNames.includes(labelObj.name.toLowerCase()) : false;
-          return hasIdMatch || hasNameMatch;
-        });
+        return targetLabelObjs.every(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       } else {
-        const hasIdMatch = assignedIds.some(id => targetLabelIds.has(id));
-        const hasNameMatch = contactTagNames.some(tagName => targetLabelNames.has(tagName));
-        return hasIdMatch || hasNameMatch;
+        return targetLabelObjs.some(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       }
     }).length;
   };
@@ -162,31 +195,22 @@ export default function ListsView() {
 
     activeSavedLists.forEach(list => {
       if (!list.labelIds || list.labelIds.length === 0) return;
-      const targetLabelIds = new Set(list.labelIds);
-      const listLabelObjs = state.chatLabels.filter(l => list.labelIds.includes(l.id));
-      const targetLabelNames = new Set(listLabelObjs.map(l => l.name.toLowerCase()));
+      const targetLabelObjs = state.chatLabels.filter(l => list.labelIds.includes(l.id));
       const type = list.matchType || 'ANY';
 
-      activeContacts.forEach(contact => {
-        const assignedIds = state.conversationLabels[contact.id] || [];
-        const contactTagNames = (contact.tags || []).map(t => t.toLowerCase());
-
+      allWorkspaceContacts.forEach(contact => {
         let matches = false;
         if (type === 'ALL') {
-          matches = Array.from(targetLabelIds).every(labelId => {
-            const labelObj = state.chatLabels.find(l => l.id === labelId);
-            return assignedIds.includes(labelId) || (labelObj ? contactTagNames.includes(labelObj.name.toLowerCase()) : false);
-          });
+          matches = targetLabelObjs.every(lObj => contactHasLabel(contact, lObj.id, lObj.name));
         } else {
-          matches = assignedIds.some(id => targetLabelIds.has(id)) || contactTagNames.some(t => targetLabelNames.has(t));
+          matches = targetLabelObjs.some(lObj => contactHasLabel(contact, lObj.id, lObj.name));
         }
-
         if (matches) matchedContactIds.add(contact.id);
       });
     });
 
     return matchedContactIds.size;
-  }, [activeSavedLists, activeContacts, state.conversationLabels, state.chatLabels]);
+  }, [activeSavedLists, allWorkspaceContacts, state.conversationLabels, state.chatLabels]);
 
   const mostActiveList = useMemo(() => {
     if (activeSavedLists.length === 0) return 'None';
@@ -201,7 +225,7 @@ export default function ListsView() {
       }
     }
     return topList.name;
-  }, [activeSavedLists, activeContacts, state.conversationLabels, state.chatLabels]);
+  }, [activeSavedLists, allWorkspaceContacts, state.conversationLabels, state.chatLabels]);
 
   const recentlyUpdatedList = useMemo(() => {
     if (activeSavedLists.length === 0) return 'None';
@@ -219,7 +243,6 @@ export default function ListsView() {
     );
   };
 
-  // If a list is selected, show List Details View
   if (activeListId) {
     const listToEdit = activeSavedLists.find(l => l.id === activeListId);
     return (
@@ -234,7 +257,7 @@ export default function ListsView() {
   return (
     <div className="flex-1 flex flex-col bg-[#F8FAFC] h-full overflow-y-auto font-sans p-8">
       
-      {/* ─── Page Header Bar ─── */}
+      {/* Page Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
           <div className="flex items-center gap-2.5">
@@ -259,7 +282,7 @@ export default function ListsView() {
         </button>
       </div>
 
-      {/* ─── Dashboard Statistics Row ─── */}
+      {/* Dashboard Statistics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
         
         {/* Card 1: Total Lists */}
@@ -336,10 +359,9 @@ export default function ListsView() {
 
       </div>
 
-      {/* ─── Main Section: Lists Grid OR Empty State ─── */}
+      {/* Main Section: Lists Grid OR Empty State */}
       {activeSavedLists.length === 0 ? (
         
-        /* ─── Premium Empty State ─── */
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
@@ -365,7 +387,6 @@ export default function ListsView() {
 
       ) : (
 
-        /* ─── Lists Cards Grid ─── */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {activeSavedLists.map(list => {
             const count = getListContactCount(list);
@@ -379,11 +400,9 @@ export default function ListsView() {
                 onClick={() => setActiveListId(list.id)}
                 className="bg-white rounded-3xl border border-slate-200/80 p-6 hover:shadow-lg hover:border-slate-300 transition-all duration-200 cursor-pointer flex flex-col justify-between group relative overflow-hidden"
               >
-                {/* Top Accent Line */}
                 <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#00C853] to-[#00E676] opacity-0 group-hover:opacity-100 transition-opacity" />
 
                 <div>
-                  {/* Title & Edit Row */}
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <h3 className="text-base font-black text-slate-900 tracking-tight group-hover:text-[#00C853] transition-colors">
                       {list.name}
@@ -407,14 +426,12 @@ export default function ListsView() {
                     </div>
                   </div>
 
-                  {/* Description */}
                   {list.description && (
                     <p className="text-xs text-slate-500 font-medium mb-4 line-clamp-2">
                       {list.description}
                     </p>
                   )}
 
-                  {/* Badges: Contact Count & Match Strategy */}
                   <div className="flex items-center gap-2 mb-4">
                     <span className="px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-extrabold shadow-2xs">
                       {count} {count === 1 ? 'Contact' : 'Contacts'}
@@ -425,7 +442,6 @@ export default function ListsView() {
                     </span>
                   </div>
 
-                  {/* Label Badge Pills */}
                   <div className="flex items-center gap-1.5 flex-wrap mb-6">
                     {listLabelObjs.length === 0 ? (
                       <span className="text-[11px] font-bold text-slate-400 italic">No labels selected</span>
@@ -451,7 +467,6 @@ export default function ListsView() {
                   </div>
                 </div>
 
-                {/* Card Footer Action */}
                 <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-extrabold text-[#00C853] group-hover:translate-x-0.5 transition-transform">
                   <span>Open Workspace Segment</span>
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-[#00C853] flex items-center justify-center group-hover:bg-[#00C853] group-hover:text-white transition-all">
@@ -465,7 +480,7 @@ export default function ListsView() {
         </div>
       )}
 
-      {/* ─── Create / Edit List Modal ─── */}
+      {/* Create / Edit List Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
@@ -475,7 +490,6 @@ export default function ListsView() {
               exit={{ scale: 0.95, opacity: 0 }}
               className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 font-sans overflow-hidden"
             >
-              {/* Modal Header */}
               <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl bg-emerald-50 text-[#00C853] flex items-center justify-center font-bold">
@@ -493,10 +507,7 @@ export default function ListsView() {
                 </button>
               </div>
 
-              {/* Form Body */}
               <form onSubmit={handleSaveList} className="space-y-4">
-                
-                {/* List Name */}
                 <div>
                   <label className="block text-xs font-extrabold text-slate-700 mb-1.5 uppercase tracking-wider">
                     List Name *
@@ -511,7 +522,6 @@ export default function ListsView() {
                   />
                 </div>
 
-                {/* Description */}
                 <div>
                   <label className="block text-xs font-extrabold text-slate-700 mb-1.5 uppercase tracking-wider">
                     Description (Optional)
@@ -525,7 +535,6 @@ export default function ListsView() {
                   />
                 </div>
 
-                {/* Match Type Strategy Selector (ANY / ALL) */}
                 <div>
                   <label className="block text-xs font-extrabold text-slate-700 mb-1.5 uppercase tracking-wider">
                     Label Matching Rule
@@ -556,7 +565,6 @@ export default function ListsView() {
                   </div>
                 </div>
 
-                {/* Select Labels Multi-Select Checkboxes */}
                 <div>
                   <label className="block text-xs font-extrabold text-slate-700 mb-1.5 uppercase tracking-wider">
                     Select Included Labels
@@ -598,7 +606,6 @@ export default function ListsView() {
                   </div>
                 </div>
 
-                {/* Live Matching Contacts Preview Banner */}
                 <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200/80 flex items-center justify-between text-xs font-extrabold text-[#00C853]">
                   <span className="flex items-center gap-2">
                     <Sparkles size={16} />
@@ -609,7 +616,6 @@ export default function ListsView() {
                   </span>
                 </div>
 
-                {/* Modal Footer Buttons */}
                 <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
                   <button
                     type="button"

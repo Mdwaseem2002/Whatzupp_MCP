@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useWorkspace } from '@/components/workspace/WorkspaceProvider';
 import { LABEL_COLORS, LabelColor } from '@/types/workspace';
 import {
@@ -16,9 +16,7 @@ import {
   Building2,
   Phone,
   Mail,
-  Tag,
-  Filter,
-  Sparkles
+  Tag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -33,6 +31,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
     activeSavedLists,
     state,
     activeContacts,
+    activeWorkspace,
     deleteSavedList,
   } = useWorkspace();
 
@@ -40,50 +39,99 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // 1. Locate current list
+  // Live workspace contacts fetched directly from workspace API
+  const [liveContacts, setLiveContacts] = useState<any[]>([]);
+
+  // Fetch live contacts from workspace API (Sales Cloud / SFMC)
+  useEffect(() => {
+    if (!activeWorkspace) return;
+    const wsId = activeWorkspace.id || 'salescloud-ws-1';
+    const isSalesCloud = activeWorkspace.type === 'salescloud' || wsId === 'salescloud-ws-1';
+    const wsKey = isSalesCloud
+      ? (process.env.NEXT_PUBLIC_WORKSPACE_SALESCLOUD_API_KEY || 'salescloud-ws-key-secret')
+      : (process.env.NEXT_PUBLIC_WORKSPACE_SFMC_API_KEY || 'sfmc-secret-key-123');
+
+    fetch(`/api/workspaces/${wsId}/contacts`, {
+      headers: { 'X-Workspace-Key': wsKey },
+      cache: 'no-store'
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.contacts && Array.isArray(data.contacts)) {
+          setLiveContacts(data.contacts);
+        }
+      })
+      .catch(err => console.warn('[ListDetailsView] Fetch live contacts failed:', err));
+  }, [activeWorkspace?.id]);
+
+  // Combine live workspace contacts + local activeContacts
+  const allWorkspaceContacts = useMemo(() => {
+    const map = new Map<string, any>();
+    liveContacts.forEach(c => map.set(c.id, c));
+    activeContacts.forEach(c => {
+      if (!map.has(c.id)) map.set(c.id, c);
+      else map.set(c.id, { ...map.get(c.id), ...c });
+    });
+    return Array.from(map.values());
+  }, [liveContacts, activeContacts]);
+
+  // Locate current list
   const currentList = useMemo(() => {
     return activeSavedLists.find(l => l.id === listId);
   }, [activeSavedLists, listId]);
 
-  // 2. Resolve label objects for this list
+  // Resolve label objects for this list
   const listLabels = useMemo(() => {
     if (!currentList || !currentList.labelIds) return [];
     return state.chatLabels.filter(l => currentList.labelIds.includes(l.id));
   }, [currentList, state.chatLabels]);
 
-  // 3. Filter contacts matching the list's label rules (ANY / ALL)
+  // Robust multi-source label matching helper
+  const contactHasLabel = (contact: any, labelId: string, labelName: string): boolean => {
+    const normName = labelName.toLowerCase().trim();
+
+    // 1. Check conversationLabels by contact.id, phoneNumber, or salesforceRecordId
+    const assignedById = state.conversationLabels[contact.id] || [];
+    const assignedByPhone = contact.phoneNumber ? (state.conversationLabels[contact.phoneNumber] || []) : [];
+    const assignedBySfId = contact.salesforceRecordId ? (state.conversationLabels[contact.salesforceRecordId] || []) : [];
+
+    if (assignedById.includes(labelId) || assignedByPhone.includes(labelId) || assignedBySfId.includes(labelId)) {
+      return true;
+    }
+
+    // 2. Check contact.labels string (comma separated from Salesforce e.g. "Qualified, VIP")
+    const rawLabelsStr = contact.labels || contact.WhatZupp_Labels__c || '';
+    if (rawLabelsStr && typeof rawLabelsStr === 'string') {
+      const splitNames = rawLabelsStr.split(',').map(s => s.trim().toLowerCase());
+      if (splitNames.includes(normName)) return true;
+    }
+
+    // 3. Check contact.tags array (e.g. ["Qualified", "VIP"])
+    if (Array.isArray(contact.tags)) {
+      const normTags = contact.tags.map((t: string) => String(t).trim().toLowerCase());
+      if (normTags.includes(normName)) return true;
+    }
+
+    return false;
+  };
+
+  // Filter contacts matching the list's label rules (ANY / ALL)
   const matchingContacts = useMemo(() => {
     if (!currentList || !currentList.labelIds || currentList.labelIds.length === 0) return [];
 
-    const targetLabelIds = new Set(currentList.labelIds);
-    const targetLabelNames = new Set(listLabels.map(l => l.name.toLowerCase()));
+    const targetLabelObjs = listLabels;
     const matchType = currentList.matchType || 'ANY';
 
-    return activeContacts.filter(contact => {
-      // Look up contact assigned label IDs
-      const assignedIds = state.conversationLabels[contact.id] || [];
-      
-      // Also match by contact.tags strings if they match label names
-      const contactTagNames = (contact.tags || []).map(t => t.toLowerCase());
-
+    return allWorkspaceContacts.filter(contact => {
       if (matchType === 'ALL') {
-        // Must match EVERY label in currentList.labelIds
-        return Array.from(targetLabelIds).every(labelId => {
-          const labelObj = state.chatLabels.find(l => l.id === labelId);
-          const hasIdMatch = assignedIds.includes(labelId);
-          const hasNameMatch = labelObj ? contactTagNames.includes(labelObj.name.toLowerCase()) : false;
-          return hasIdMatch || hasNameMatch;
-        });
+        return targetLabelObjs.every(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       } else {
-        // ANY (OR) logic: Must match AT LEAST ONE label
-        const hasIdMatch = assignedIds.some(id => targetLabelIds.has(id));
-        const hasNameMatch = contactTagNames.some(tagName => targetLabelNames.has(tagName));
-        return hasIdMatch || hasNameMatch;
+        return targetLabelObjs.some(lObj => contactHasLabel(contact, lObj.id, lObj.name));
       }
     });
-  }, [currentList, listLabels, activeContacts, state.conversationLabels, state.chatLabels]);
+  }, [currentList, listLabels, allWorkspaceContacts, state.conversationLabels, state.chatLabels]);
 
-  // 4. Apply search filter
+  // Apply search filter
   const filteredContacts = useMemo(() => {
     if (!searchQuery.trim()) return matchingContacts;
     const q = searchQuery.toLowerCase();
@@ -95,7 +143,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
     );
   }, [matchingContacts, searchQuery]);
 
-  // 5. Bulk selection state
+  // Bulk selection state
   const isAllSelected = filteredContacts.length > 0 && selectedContactIds.length === filteredContacts.length;
 
   const toggleSelectAll = () => {
@@ -124,7 +172,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
         <p className="text-sm font-bold">List not found or has been deleted.</p>
         <button
           onClick={onBack}
-          className="mt-4 px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-extrabold shadow-sm hover:bg-emerald-700 transition-all"
+          className="mt-4 px-4 py-2 bg-[#00C853] text-white rounded-xl text-xs font-extrabold shadow-sm hover:bg-[#00B048] transition-all"
         >
           Back to Lists
         </button>
@@ -135,7 +183,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
   return (
     <div className="flex-1 flex flex-col bg-[#F8FAFC] h-full overflow-hidden font-sans">
       
-      {/* ─── Top Header Bar ─── */}
+      {/* Top Header Bar */}
       <div className="bg-white border-b border-slate-200/80 px-8 py-5 shrink-0 shadow-2xs">
         
         {/* Back Button */}
@@ -150,7 +198,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
 
           <span className="text-slate-300 font-bold">/</span>
 
-          {/* Match Type Badge */}
           <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[#00C853] text-[10px] font-black uppercase tracking-wider">
             {currentList.matchType === 'ALL' ? 'Match All (AND)' : 'Match Any (OR)'}
           </span>
@@ -159,7 +206,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
         {/* Title, Description & Actions Row */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
-          {/* Title & Description */}
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-900 tracking-tight">
@@ -176,7 +222,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
             )}
           </div>
 
-          {/* Action Buttons */}
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => alert(`Broadcast feature ready: Target ${selectedContactIds.length || matchingContacts.length} contacts.`)}
@@ -244,10 +289,9 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
 
       </div>
 
-      {/* ─── Search & Bulk Select Toolbar ─── */}
+      {/* Search & Bulk Select Toolbar */}
       <div className="px-8 py-4 bg-slate-50/80 border-b border-slate-200/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
         
-        {/* Search Bar */}
         <div className="relative flex-1 max-w-md">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
@@ -259,7 +303,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
           />
         </div>
 
-        {/* Bulk Select Checkbox Foundation */}
         <div className="flex items-center gap-3">
           <button
             onClick={toggleSelectAll}
@@ -282,7 +325,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
 
       </div>
 
-      {/* ─── Contact Cards Grid ─── */}
+      {/* Contact Cards Grid */}
       <div className="flex-1 overflow-y-auto p-8">
         
         {filteredContacts.length === 0 ? (
@@ -303,14 +346,15 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredContacts.map(contact => {
               const isSelected = selectedContactIds.includes(contact.id);
-              const assignedLabelIds = state.conversationLabels[contact.id] || [];
-              const contactLabelObjs = state.chatLabels.filter(l => 
-                assignedLabelIds.includes(l.id) || (contact.tags || []).map(t => t.toLowerCase()).includes(l.name.toLowerCase())
+              
+              // Find matching labels for this contact to display badges
+              const contactLabelObjs = state.chatLabels.filter(lbl => 
+                contactHasLabel(contact, lbl.id, lbl.name)
               );
 
               const initials = contact.name
                 .split(' ')
-                .map(n => n[0])
+                .map((n: string) => n[0])
                 .join('')
                 .toUpperCase()
                 .slice(0, 2);
@@ -328,7 +372,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
                       : 'border-slate-200/80 hover:border-slate-300'
                   }`}
                 >
-                  {/* Select Checkbox Top-Right */}
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleSelectContact(contact.id); }}
                     className="absolute top-4 right-4 text-slate-400 hover:text-[#00C853] transition-colors"
@@ -340,7 +383,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
                     )}
                   </button>
 
-                  {/* Contact Avatar & Info */}
                   <div className="flex items-start gap-3.5 mb-3">
                     <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-[#00C853] to-[#00E676] text-white font-black text-sm flex items-center justify-center shadow-sm shrink-0">
                       {initials}
@@ -358,7 +400,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
                     </div>
                   </div>
 
-                  {/* Contact Details (Phone / Email) */}
                   <div className="space-y-1 mb-4 text-xs font-medium text-slate-600">
                     <div className="flex items-center gap-2">
                       <Phone size={13} className="text-slate-400 shrink-0" />
@@ -372,7 +413,6 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
                     )}
                   </div>
 
-                  {/* Label Badges */}
                   <div className="flex items-center gap-1.5 flex-wrap pt-3 border-t border-slate-100">
                     {contactLabelObjs.length === 0 ? (
                       <span className="text-[10px] text-slate-400 font-bold italic">No active labels</span>
@@ -404,7 +444,7 @@ export default function ListDetailsView({ listId, onBack, onEdit }: ListDetailsV
 
       </div>
 
-      {/* ─── Delete Confirmation Modal ─── */}
+      {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {showDeleteConfirm && (
           <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
