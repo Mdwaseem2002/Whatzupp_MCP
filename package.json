@@ -5,13 +5,12 @@
   "scripts": {
     "dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 next dev",
     "build": "prisma generate && cross-env NODE_OPTIONS=--max-old-space-size=4096 next build",
-    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "test:isolation": "npx tsx src/__tests__/workspaceIsolation.test.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.5.0",
+    "@prisma/client": "6.5.0",
     "axios": "^1.8.4",
     "bcryptjs": "^3.0.3",
     "emoji-picker-react": "^4.18.0",
@@ -38,7 +37,7 @@
     "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "^16.2.3",
-    "prisma": "^6.5.0",
+    "prisma": "6.5.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5"
